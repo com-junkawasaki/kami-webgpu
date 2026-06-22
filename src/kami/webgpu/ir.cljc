@@ -58,6 +58,24 @@
   [ir eye target]
   (-> ir (assoc-in [:globals :eye] eye) (assoc-in [:globals :target] target)))
 
+;; --- camera rig: EDN data → eye/target (pure, cross-platform) ----------------
+;;   {:distance 64 :height 55 :azimuth 0.785 :look-height 0.0}
+;; A rig is data: store it as datoms, fork it, animate :azimuth — the executor just
+;; consumes the eye/target it produces.
+
+(def default-rig {:distance 64.0 :height 55.0 :azimuth 0.785 :look-height 0.0})
+
+(defn rig->camera
+  "Given a camera-rig map and the follow point [x z] (world), return {:eye :target}.
+   eye orbits the target at :distance/:azimuth, raised to :height; target sits at
+   :look-height above the follow point."
+  [rig [px pz]]
+  (let [{:keys [distance height azimuth look-height]} (merge default-rig rig)]
+    {:eye    [(+ px (* distance #?(:clj (Math/cos azimuth) :cljs (js/Math.cos azimuth))))
+              height
+              (+ pz (* distance #?(:clj (Math/sin azimuth) :cljs (js/Math.sin azimuth))))]
+     :target [px look-height pz]}))
+
 (defn valid?
   "A cheap structural check — enough to catch obvious authoring mistakes."
   [ir]

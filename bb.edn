@@ -1,0 +1,6 @@
+;; babashka task runner for kami-webgpu. The .cljc domain interpreters are the same source
+;; the web (CLJS) and native (kotoba-clj→WASM) run; `bb test` checks them on the JVM.
+{:paths ["src" "test"]
+ :tasks
+ {test {:doc  "Run the .cljc domain-interpreter unit tests (cross-platform correctness)."
+        :task (load-file "test/domains_bb_test.clj")}}}

@@ -49,5 +49,27 @@
                                [(ir/instance [0 0 0] [1 0 0] [2 5])])))
   (is (not (ir/valid? {:globals {} :instances [{:bad true}]}))))
 
+(deftest edge-cases
+  ;; fsm: jump state has both exits
+  (is (= :move (fsm/advance fsm/default-player-fsm :jump #{:moving})))
+  (is (= :idle (fsm/advance fsm/default-player-fsm :jump #{:still})))
+  ;; physics: non-colliding layers produce no separation
+  (is (empty? (phys/separate phys/default-layers
+                             [{:id 1 :layer :player :x 0 :y 0} {:id 2 :layer :pickup :x 5 :y 0}]))
+      "player+pickup don't collide → no deltas")
+  (is (= 34.0 (phys/radius phys/default-layers :player)))
+  ;; netsync: apply-snapshot merges only synced fields
+  (let [merged (net/apply-snapshot net/default-schema {:x 0 :hp 1 :keep 7} {:x 9 :hp 2 :tag "x"})]
+    (is (= 9 (:x merged)) "synced field overwritten")
+    (is (= 7 (:keep merged)) "non-schema local field preserved")
+    (is (not (contains? merged :tag)) "non-synced incoming dropped"))
+  ;; level: radius floors at :min-radius; bots spawn list
+  (is (= 200.0 (double (level/zone-radius level/default-level 100000))) "floors at min-radius")
+  (is (= 6 (count (level/spawn-points level/default-level :bots))))
+  ;; ir: frame-ir carries globals + instances
+  (let [f (ir/render-ir (ir/sky [0.1 0.2 0.3] [0 -1 0] [1 1 1]) [(ir/instance [0 0 0] [1 0 0] [1 1])])]
+    (is (= [0.1 0.2 0.3] (get-in f [:globals :sky :horizon])))
+    (is (= 1 (count (:instances f))))))
+
 (let [{:keys [fail error]} (run-tests)]
   (System/exit (if (pos? (+ fail error)) 1 0)))

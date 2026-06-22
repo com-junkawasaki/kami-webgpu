@@ -29,6 +29,12 @@
     (aset o 0 (/ f aspect)) (aset o 5 f)
     (aset o 10 (* far nf)) (aset o 11 -1.0) (aset o 14 (* far near nf)) o))
 
+(defn- ortho [l r b t near far]                ;; RH, depth 0..1 (wgpu) — for the sun
+  (let [o (m4)]
+    (aset o 0 (/ 2.0 (- r l))) (aset o 5 (/ 2.0 (- t b))) (aset o 10 (/ 1.0 (- near far)))
+    (aset o 12 (- (/ (+ r l) (- r l)))) (aset o 13 (- (/ (+ t b) (- t b))))
+    (aset o 14 (/ near (- near far))) (aset o 15 1.0) o))
+
 (defn- v-sub [a b] [(- (a 0) (b 0)) (- (a 1) (b 1)) (- (a 2) (b 2))])
 (defn- v-cross [a b] [(- (* (a 1) (b 2)) (* (a 2) (b 1)))
                       (- (* (a 2) (b 0)) (* (a 0) (b 2)))
@@ -81,8 +87,25 @@
 ;; specular + a Fresnel rim, Reinhard tonemap + gamma. Material params (metallic/rough)
 ;; will move into the EDN render-IR as the next layer (passes/materials as datoms).
 (def ^:private SHADER "
-struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32> };
+struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> g: G;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
+@group(0) @binding(2) var shadowSamp: sampler_comparison;
+fn shadow(wpos: vec3<f32>, ndl: f32) -> f32 {
+  let lc = g.light_vp * vec4<f32>(wpos, 1.0);
+  let ndc = lc.xyz / lc.w;
+  let uv = vec2<f32>(ndc.x*0.5+0.5, 0.5-ndc.y*0.5);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) { return 1.0; }
+  let bias = max(0.0025*(1.0-ndl), 0.0006);
+  let texel = 1.0/2048.0;
+  var lit = 0.0;
+  for (var dx = -1; dx <= 1; dx++) {
+    for (var dy = -1; dy <= 1; dy++) {
+      lit += textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(f32(dx),f32(dy))*texel, ndc.z - bias);
+    }
+  }
+  return lit/9.0;
+}
 struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32>, @location(1) col: vec3<f32>, @location(2) wpos: vec3<f32>, @location(3) mat: vec3<f32> };
 @vertex
 fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
@@ -113,13 +136,27 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
   let specTint  = mix(vec3<f32>(1.0), i.col, metallic);
   let spec = pow(max(dot(N, H), 0.0), shininess) * specStr;
   let rim  = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25;
-  var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9 * (1.0 - metallic*0.7))
-        + specTint * g.sun_col.rgb * spec
+  let sh = shadow(i.wpos, ndl);            // 1 = lit, 0 = in shadow (PCF)
+  var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9 * (1.0 - metallic*0.7) * sh)
+        + specTint * g.sun_col.rgb * spec * sh
         + g.sky.rgb * rim
-        + i.col * emissive;               // EDN-authored glow
+        + i.col * emissive;               // EDN-authored glow (unshadowed)
   c = c / (c + vec3<f32>(1.0));                 // Reinhard tonemap
   c = pow(c, vec3<f32>(1.0/2.2));               // gamma
   return vec4<f32>(c, 1.0);
+}")
+
+;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
+;; Reuses the same G uniform (reads g.light_vp) + the same vertex/instance buffers.
+(def ^:private SHADOW-WGSL "
+struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> g: G;
+@vertex
+fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
+      @location(2) m0: vec4<f32>, @location(3) m1: vec4<f32>, @location(4) m2: vec4<f32>, @location(5) m3: vec4<f32>,
+      @location(6) color: vec4<f32>, @location(7) material: vec4<f32>) -> @builtin(position) vec4<f32> {
+  let model = mat4x4<f32>(m0, m1, m2, m3);
+  return g.light_vp * model * vec4<f32>(pos, 1.0);
 }")
 
 (def ^:private MAX-INST 16384)
@@ -158,26 +195,44 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
                     vbuf (mkbuf verts (.-VERTEX U))
                     ibuf (mkbuf idx (.-INDEX U))
                     inst (.createBuffer device #js {:size (* MAX-INST 96) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
-                    gbuf (.createBuffer device #js {:size 112 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
+                    gbuf (.createBuffer device #js {:size 176 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
+                    TU js/GPUTextureUsage
+                    ;; vertex layout shared by the main + shadow pipelines
+                    vlayout #js [#js {:arrayStride 24
+                                      :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)]}
+                                 ;; instance: model(64) + color(16) + material(16) = 96 bytes
+                                 #js {:arrayStride 96 :stepMode "instance"
+                                      :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3)
+                                                       (vattr "float32x4" 32 4) (vattr "float32x4" 48 5)
+                                                       (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}]
                     shader (.createShaderModule device #js {:code (or (:wgsl opts) SHADER)})
+                    shadow-shader (.createShaderModule device #js {:code SHADOW-WGSL})
                     pipeline (.createRenderPipeline device
                                #js {:layout "auto"
-                                    :vertex #js {:module shader :entryPoint "vs"
-                                                 :buffers #js [#js {:arrayStride 24
-                                                                    :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)]}
-                                                               ;; instance: model(64) + color(16) + material(16) = 96 bytes
-                                                               #js {:arrayStride 96 :stepMode "instance"
-                                                                    :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3)
-                                                                                     (vattr "float32x4" 32 4) (vattr "float32x4" 48 5)
-                                                                                     (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}]}
+                                    :vertex #js {:module shader :entryPoint "vs" :buffers vlayout}
                                     :fragment #js {:module shader :entryPoint "fs" :targets #js [#js {:format fmt}]}
                                     :primitive #js {:cullMode "back"}
                                     :depthStencil #js {:format "depth24plus" :depthWriteEnabled true :depthCompare "less-equal"}})
+                    ;; shadow pass: depth-only (no fragment), renders into the shadow map
+                    shadow-pipe (.createRenderPipeline device
+                                  #js {:layout "auto"
+                                       :vertex #js {:module shadow-shader :entryPoint "vs" :buffers vlayout}
+                                       :primitive #js {:cullMode "back"}
+                                       :depthStencil #js {:format "depth32float" :depthWriteEnabled true :depthCompare "less"}})
+                    shadow-tex (.createTexture device #js {:size #js [2048 2048] :format "depth32float"
+                                                          :usage (bit-or (.-RENDER_ATTACHMENT TU) (.-TEXTURE_BINDING TU))})
+                    shadow-view (.createView shadow-tex)
+                    shadow-samp (.createSampler device #js {:compare "less-equal" :magFilter "linear" :minFilter "linear"})
                     bind (.createBindGroup device #js {:layout (.getBindGroupLayout pipeline 0)
-                                                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}]})
-                    depth (.createTexture device #js {:size #js [w h] :format "depth24plus" :usage (.-RENDER_ATTACHMENT js/GPUTextureUsage)})]
+                                                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}
+                                                                     #js {:binding 1 :resource shadow-view}
+                                                                     #js {:binding 2 :resource shadow-samp}]})
+                    shadow-bind (.createBindGroup device #js {:layout (.getBindGroupLayout shadow-pipe 0)
+                                                             :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}]})
+                    depth (.createTexture device #js {:size #js [w h] :format "depth24plus" :usage (.-RENDER_ATTACHMENT TU)})]
                 (.configure ctx #js {:device device :format fmt :alphaMode "opaque"})
                 {:device device :queue q :ctx ctx :pipeline pipeline :bind bind
+                 :shadow-pipe shadow-pipe :shadow-bind shadow-bind :shadow-view shadow-view
                  :vbuf vbuf :ibuf ibuf :inst inst :gbuf gbuf :idx-count (.-length idx)
                  :depth (.createView depth) :w w :h h }))))))))
 
@@ -186,7 +241,8 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
 (defn draw!
   "Draw one frame from a render-IR CLJS map: {:globals {:sky {:horizon :sun-dir :sun}
    :eye :target} :instances [{:pos :color :size :yaw}]}. Synchronous; no wasm."
-  [{:keys [device queue ctx pipeline bind vbuf ibuf inst gbuf idx-count depth w h]} ir]
+  [{:keys [device queue ctx pipeline bind shadow-pipe shadow-bind shadow-view
+           vbuf ibuf inst gbuf idx-count depth w h]} ir]
   (let [g (:globals ir)
         sky (:sky g)
         horizon (arr3 sky :horizon [0.7 0.8 0.9])
@@ -201,13 +257,21 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
         target (arr3 g :target [cxx 0 czz])
         vp (m4-mul (perspective (/ (* 60 js/Math.PI) 180.0) (/ w (max 1 h)) 0.5 4000.0)
                    (look-at (vec eye) (vec target) [0 1 0]))
-        ;; globals uniform: vp(16) + sun_dir(4) + sun_col(4) + sky(4)
-        gf (js/Float32Array. 28)]
+        ;; sun light view-proj: orthographic, centred on the camera target, looking
+        ;; down the sun direction — this is the shadow map's camera.
+        sl (let [l (js/Math.hypot (sun-dir 0) (sun-dir 1) (sun-dir 2)) l (if (< l 1e-6) 1.0 l)]
+             [(/ (sun-dir 0) l) (/ (sun-dir 1) l) (/ (sun-dir 2) l)])
+        ltgt [cxx 0 czz]
+        leye [(- (ltgt 0) (* (sl 0) 200)) (- (ltgt 1) (* (sl 1) 200)) (- (ltgt 2) (* (sl 2) 200))]
+        light-vp (m4-mul (ortho -130 130 -130 130 1.0 420.0) (look-at leye ltgt [0 1 0]))
+        ;; uniform: vp(16) + sun_dir(4) + sun_col(4) + sky(4) + light_vp(16) = 44 floats
+        gf (js/Float32Array. 44)]
     (.set gf vp 0)
     ;; .w of each carries the camera eye (x,y,z) for view-dependent lighting
     (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) (nth eye 0)]) 16)
     (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
     (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) (nth eye 2)]) 24)
+    (.set gf light-vp 28)
     (.writeBuffer queue gbuf 0 gf)
     ;; instance buffer: model(16) + color(4) + material(4) = 24 floats. The material
     ;; (metallic, roughness, emissive) is EDN data on each instance, defaulting to a
@@ -222,17 +286,26 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
           (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
       (.writeBuffer queue inst 0 idata)
       (let [enc (.createCommandEncoder device)
+            ninst (count insts)
+            draw-geom (fn [p pipe bnd]
+                        (when (pos? ninst)
+                          (.setPipeline p pipe)
+                          (.setBindGroup p 0 bnd)
+                          (.setVertexBuffer p 0 vbuf)
+                          (.setVertexBuffer p 1 inst)
+                          (.setIndexBuffer p ibuf "uint16")
+                          (.drawIndexed p idx-count ninst)))
+            ;; PASS 1 — shadow map: depth from the sun's POV (no colour)
+            spass (.beginRenderPass enc
+                    #js {:colorAttachments #js []
+                         :depthStencilAttachment #js {:view shadow-view :depthLoadOp "clear" :depthStoreOp "store" :depthClearValue 1.0}})
+            _ (do (draw-geom spass shadow-pipe shadow-bind) (.end spass))
+            ;; PASS 2 — main: lit, sampling the shadow map
             view (.createView (.getCurrentTexture ctx))
             pass (.beginRenderPass enc
                    #js {:colorAttachments #js [#js {:view view :loadOp "clear" :storeOp "store"
                                                     :clearValue #js {:r (horizon 0) :g (horizon 1) :b (horizon 2) :a 1}}]
                         :depthStencilAttachment #js {:view depth :depthLoadOp "clear" :depthStoreOp "store" :depthClearValue 1.0}})]
-        (when (pos? (count insts))
-          (.setPipeline pass pipeline)
-          (.setBindGroup pass 0 bind)
-          (.setVertexBuffer pass 0 vbuf)
-          (.setVertexBuffer pass 1 inst)
-          (.setIndexBuffer pass ibuf "uint16")
-          (.drawIndexed pass idx-count (count insts)))
+        (draw-geom pass pipeline bind)
         (.end pass)
         (.submit queue #js [(.finish enc)])))))

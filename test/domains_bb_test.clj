@@ -89,5 +89,8 @@
   ;; the storm radius is monotonically non-increasing over ticks
   (is (apply >= (map #(level/zone-radius level/default-level %) [0 100 1000 10000 100000]))))
 
+;; throw (don't System/exit) on failure so this file composes as a bb-task dependency
+;; (`bb verify` runs this first, then the native suites — System/exit would abort that).
 (let [{:keys [fail error]} (run-tests)]
-  (System/exit (if (pos? (+ fail error)) 1 0)))
+  (when (pos? (+ fail error))
+    (throw (ex-info "domain interpreter tests failed" {:fail fail :error error}))))

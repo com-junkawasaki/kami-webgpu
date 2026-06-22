@@ -71,5 +71,23 @@
     (is (= [0.1 0.2 0.3] (get-in f [:globals :sky :horizon])))
     (is (= 1 (count (:instances f))))))
 
+(deftest properties
+  ;; collides? is symmetric in its arguments
+  (doseq [[a b] [[:player :bot] [:bot :player] [:player :pickup] [:bot :prop]]]
+    (is (= (phys/collides? phys/default-layers a b)
+           (phys/collides? phys/default-layers b a))
+        (str "collides? symmetric for " a "/" b)))
+  ;; interp endpoints: t=0 → source value, t=1 → target value (lerp field)
+  (let [e {:x 0 :y 0 :z 0 :rx 0 :ry 0 :hp 0} t {:x 9 :y 0 :z 0 :rx 0 :ry 0 :hp 0}]
+    (is (= 0.0 (double (:x (net/interp net/default-schema e t 0.0)))) "t=0 → source")
+    (is (= 9.0 (double (:x (net/interp net/default-schema e t 1.0)))) "t=1 → target"))
+  ;; advance is identity when no transition's event matches
+  (is (= :idle (fsm/advance fsm/default-player-fsm :idle #{:nonexistent})))
+  ;; snapshot is idempotent (snapshot of a snapshot keeps the same synced keys)
+  (let [s1 (net/snapshot net/default-schema {:x 1 :y 2 :z 3 :rx 0 :ry 0 :hp 9 :extra 1})]
+    (is (= s1 (net/snapshot net/default-schema s1))))
+  ;; the storm radius is monotonically non-increasing over ticks
+  (is (apply >= (map #(level/zone-radius level/default-level %) [0 100 1000 10000 100000]))))
+
 (let [{:keys [fail error]} (run-tests)]
   (System/exit (if (pos? (+ fail error)) 1 0)))

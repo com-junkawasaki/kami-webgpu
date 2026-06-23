@@ -1,0 +1,105 @@
+(ns kami.sprite2d
+  "2D characters as EDN — 'hiccup for sprites'. A sprite is a vector of primitive shapes in
+   world-unit offsets:
+     [[:ellipse {:dx :dy :rx :ry :fill}]
+      [:circle  {:dx :dy :r :fill}]
+      [:rect    {:dx :dy :w :h :fill}]
+      [:arc     {:dx :dy :r :a0 :a1 :w :stroke}]]   ;; stroked arc — crescents, brims
+   The renderer draws a top-down view: sky→ground wash + scattered trees + entity sprites,
+   the camera centred on the player. No WebGPU — this is the canvas-2D twin for 2D games,
+   so the characters and title art are data you can read and fork like everything else.
+
+   The *layout* (which sprite, where, in what order) is a pure draw list in
+   kami.sprite2d.layout — CLJ-tested on the JVM (camera, W/S orientation, variant swap,
+   depth). This painter only turns that list + the trees into canvas ops."
+  (:require [kami.sprite2d.layout :as layout]))
+
+(defn- css [c] (str "rgba(" (js/Math.round (* 255 (nth c 0))) ","
+                    (js/Math.round (* 255 (nth c 1))) ","
+                    (js/Math.round (* 255 (nth c 2))) "," (nth c 3 1) ")"))
+
+(defn prim!
+  "Draw one EDN primitive onto a 2D context (already translated/scaled to the sprite origin)."
+  [ctx [kind o]]
+  (case kind
+    :circle  (do (set! (.-fillStyle ctx) (css (:fill o)))
+                 (.beginPath ctx) (.arc ctx (:dx o 0) (:dy o 0) (:r o 10) 0 (* 2 js/Math.PI)) (.fill ctx))
+    :ellipse (do (set! (.-fillStyle ctx) (css (:fill o)))
+                 (.beginPath ctx) (.ellipse ctx (:dx o 0) (:dy o 0) (:rx o 10) (:ry o 10) 0 0 (* 2 js/Math.PI)) (.fill ctx))
+    :rect    (do (set! (.-fillStyle ctx) (css (:fill o)))
+                 (.fillRect ctx (- (:dx o 0) (/ (:w o 10) 2)) (- (:dy o 0) (/ (:h o 10) 2)) (:w o 10) (:h o 10)))
+    :arc     (do (set! (.-strokeStyle ctx) (css (:stroke o))) (set! (.-lineWidth ctx) (:w o 8))
+                 (set! (.-lineCap ctx) "round")
+                 (.beginPath ctx) (.arc ctx (:dx o 0) (:dy o 0) (:r o 10) (:a0 o 0) (:a1 o js/Math.PI)) (.stroke ctx))
+    nil))
+
+(defn draw-sprite!
+  "Draw a sprite (vector of prims) centred at screen (sx,sy), scaled by k (with a soft shadow)."
+  [ctx sprite sx sy k]
+  (.save ctx)
+  (.translate ctx sx sy)
+  ;; ground shadow
+  (set! (.-fillStyle ctx) "rgba(0,0,0,.22)")
+  (.beginPath ctx) (.ellipse ctx 0 (* 260 k) (* 230 k) (* 70 k) 0 0 (* 2 js/Math.PI)) (.fill ctx)
+  (.scale ctx k k)
+  (doseq [p sprite] (prim! ctx p))
+  (.restore ctx))
+
+;; deterministic tree scatter (top-down): a fixed pseudo-random field, memoised once.
+(defonce ^:private trees* (atom nil))
+(defn- trees [spread n]
+  (or @trees*
+      (reset! trees*
+        (loop [i 0 s 2654435769 acc []]
+          (if (>= i n) acc
+            (let [s1 (bit-and (+ (* 1103515245 s) 12345) 0x7fffffff)
+                  s2 (bit-and (+ (* 1103515245 s1) 12345) 0x7fffffff)
+                  s3 (bit-and (+ (* 1103515245 s2) 12345) 0x7fffffff)
+                  x (- (* (/ s1 0x7fffffff) (* 2 spread)) spread)
+                  y (- (* (/ s2 0x7fffffff) (* 2 spread)) spread)
+                  r (+ 70 (* (/ s3 0x7fffffff) 120))]
+              (recur (inc i) s3 (conj acc [x y r]))))))))
+
+(defn draw-2d!
+  "Render one frame of the top-down 2D view onto ctx from the scene EDN + entity snapshot.
+   `shake` is an optional [dx dy] camera offset (the slap kick) applied to the world layer."
+  [ctx scene snap shake]
+  (let [cv (.-canvas ctx) W (.-width cv) H (.-height cv)
+        sky (:render/sky scene)
+        cfg (:render/sprite2d scene)
+        k   (* (get cfg :scale 0.34) (/ W 900.0))          ;; world→screen, density-independent
+        sprites (:sprites scene)
+        player (first (filter #(= (:tag %) "player") snap))
+        px (if player (nth (:pos player) 0) 0)
+        py (if player (nth (:pos player) 1) 0)
+        sx (fn [x] (+ (/ W 2) (* (- x px) k)))
+        sy (fn [y] (- (/ H 2) (* (- y py) k)))]   ;; world +y = screen up (W moves you up)
+    ;; sky → ground wash
+    (let [g (.createLinearGradient ctx 0 0 0 H)]
+      (.addColorStop g 0 (css (or (:zenith sky) [0.04 0.06 0.12])))
+      (.addColorStop g 1 (css (or (:ground sky) [0.10 0.20 0.12])))
+      (set! (.-fillStyle ctx) g) (.fillRect ctx 0 0 W H))
+    ;; world layer (trees + characters) shakes on impact; the sky/ground wash above stays put
+    (.save ctx)
+    (when shake (.translate ctx (nth shake 0) (nth shake 1)))
+    ;; trees (behind characters), faded by the night
+    (doseq [[tx ty tr] (trees (get cfg :tree-spread 4200) (get cfg :tree-count 90))]
+      (let [s (sx tx) t (sy ty)]
+        (when (and (> s -120) (< s (+ W 120)) (> t -120) (< t (+ H 120)))
+          (set! (.-fillStyle ctx) "rgba(0,0,0,.18)")
+          (.beginPath ctx) (.ellipse ctx s (+ t (* tr k 0.7)) (* tr k 0.8) (* tr k 0.25) 0 0 (* 2 js/Math.PI)) (.fill ctx)
+          (set! (.-fillStyle ctx) "rgb(34,74,42)")
+          (.beginPath ctx) (.arc ctx s t (* tr k) 0 (* 2 js/Math.PI)) (.fill ctx)
+          (set! (.-fillStyle ctx) "rgb(22,52,30)")
+          (.beginPath ctx) (.arc ctx (- s (* tr k 0.3)) (- t (* tr k 0.3)) (* tr k 0.5) 0 (* 2 js/Math.PI)) (.fill ctx))))
+    ;; entity sprites from the pure, CLJ-tested layout (camera, variant swap, depth order)
+    (doseq [op (layout/draw-list scene snap W H)]
+      (draw-sprite! ctx (:sprite op) (:sx op) (:sy op) k))
+    (.restore ctx)))
+
+(defn draw-portrait!
+  "Draw a single sprite centred in ctx (for the title card character art)."
+  [ctx sprite k]
+  (let [cv (.-canvas ctx)]
+    (.clearRect ctx 0 0 (.-width cv) (.-height cv))
+    (draw-sprite! ctx sprite (/ (.-width cv) 2) (* (.-height cv) 0.62) k)))

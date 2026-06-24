@@ -29,6 +29,7 @@
          '[kami.cue :as kcue]
          '[kami.css :as kcss]
          '[kami.html :as khtml]
+         '[kami.sql :as ksql]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
@@ -203,6 +204,19 @@
                             :server {:timeout 30 :tls true}
                             :#Person {:name :string :age :int}}))
            (shell {:out :string :err :string} "cue" "vet" (path "config.cue"))   ;; real CUE parse + validate
+           true)}
+
+   {:name "sql → sqlite3" :tool "sqlite3" :hint "(ships with macOS)"
+    :run (fn []
+           (spit (path "schema.sql")
+                 (ksql/sql [:create-table :users
+                            [:col :id :integer {:primary-key true}]
+                            [:col :name [:varchar 255] {:not-null true}]
+                            [:col :email :text {:unique true}]
+                            [:col :created :timestamp {:default :current-timestamp}]]
+                           [:create-index :ix_users_email :users [:email]]
+                           [:insert :users [:id :name] [1 "O'Brien"]]))
+           (shell {:out :string :err :string} "sqlite3" ":memory:" (str ".read " (path "schema.sql")))   ;; really run the DDL
            true)}
 
    {:name "toml → taplo" :tool "taplo" :hint "cargo install taplo-cli"

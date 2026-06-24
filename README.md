@@ -56,8 +56,35 @@ The heavy rasterization is the GPU's; CLJS only records light per-frame commands
 Requires `:simple` (not `:advanced`) shadow-cljs optimizations, or `^js` externs —
 the WebGPU JS method names must not be renamed.
 
+## Authoring the look (data-driven globals)
+
+The shader's look used to be baked-in constants; it is now **data** under the frame's
+`:globals`. Every key is optional — omit it and the executor merges `kami.webgpu.ir`'s
+defaults, which reproduce the original render byte-for-byte (pinned by `test/render_ir_test.clj`).
+
+| `[:globals …]` key | what it controls | merged over |
+|---|---|---|
+| `:lighting` | ambient (`:ambient` `:ambient-sky`), specular (`:spec-min/-max`), Fresnel rim (`:rim` `:rim-power`), Blinn-Phong (`:shininess-min/-max`), `:sun-diffuse`, `:metallic-diffuse-cut`, `:gamma`, shadow PCF (`:shadow-bias-slope/-min/-texel`) | `ir/default-lighting` |
+| `:shadow` | the sun's ortho frustum: `:extent` (half-width), `:near`, `:far`, `:distance` (back along −sun-dir) | `ir/default-shadow` |
+| `:fov` `:near` `:far` | the perspective camera (degrees / planes) | `60 / 0.5 / 4000` |
+| *(init! opt)* `:geometry` | the `:geo` mesh kinds — `{:kw {:type :box/:sphere/:cylinder/:plane …params}}` baked by `ir/mesh-from-spec` | `ir/default-geometry` |
+
+```clojure
+;; a warmer dusk look + a wider shadow frustum + a custom mesh kind — all data:
+(gpu/init! canvas {:geometry (assoc ir/default-geometry :slab {:type :box :size [3 0.3 3]})})
+(gpu/draw! ctx
+  (-> (wir/render-ir sky instances eye target)
+      (assoc-in [:globals :lighting] {:ambient [0.20 0.12 0.10] :rim 0.4 :gamma 2.4})
+      (assoc-in [:globals :shadow]   {:extent 300.0})
+      (assoc-in [:globals :fov] 70)))
+```
+
+In network-isekai a game authors the same data in `scene.edn` as `:render/lighting`,
+`:render/shadow`, `:render/camera`; `isekai.render-ir/scene->globals` threads it through.
+
 ## Status
 
 Renders instanced, lit cuboids with a follow/overview camera (proven live in Chrome
-via WebGPU). Roadmap: EDN-authored passes / pipelines / materials / WGSL, shadows,
-PBR, and a native Rust executor over the same EDN.
+via WebGPU). Shadow-mapped, PBR, with the **lighting model, sun frustum, camera, and
+geometry library all data-driven** (see "Authoring the look"). Roadmap: EDN-authored
+post-FX passes / pipelines / WGSL, and a native Rust executor over the same EDN.

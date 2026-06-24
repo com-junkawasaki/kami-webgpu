@@ -48,16 +48,20 @@
   (is (= (g/box 1 2 3) (g/box 1 2 3)))
   (is (= (g/cylinder 1 2 8) (g/cylinder 1 2 8))))
 
-(deftest box-matches-the-cross-platform-golden
-  ;; The committed fixtures/box-golden.json is the ONE canonical box the native renderer
+(defn- golden-json [{:keys [positions normals indices]}]
+  (let [verts (vec (mapcat into positions normals))]
+    (str "{\"verts\":[" (str/join "," verts) "],\"indices\":[" (str/join "," indices) "]}\n")))
+
+(deftest meshes-match-the-cross-platform-golden
+  ;; The committed fixtures/*-golden.json are the canonical meshes the native renderer
   ;; (kami-webgpu-rs) also asserts against — so a divergence in EITHER language fails its test
-  ;; instead of drifting silently. This locks the CLJ side to that fixture.
-  (let [{:keys [positions normals indices]} (g/box 1 1 1)
-        verts (vec (mapcat into positions normals))
-        regenerated (str "{\"verts\":[" (str/join "," verts)
-                         "],\"indices\":[" (str/join "," indices) "]}\n")]
-    (is (= regenerated (slurp "fixtures/box-golden.json"))
-        "CLJC box(1,1,1) must equal the committed golden the native renderer matches")))
+  ;; instead of drifting silently. This locks the CLJ side to those fixtures.
+  (is (= (golden-json (g/box 1 1 1))          (slurp "fixtures/box-golden.json"))
+      "CLJC box(1,1,1) must equal the committed golden")
+  (is (= (golden-json (g/sphere 1.0 4 6))     (slurp "fixtures/sphere-golden.json"))
+      "CLJC sphere(1,4,6) must equal the committed golden")
+  (is (= (golden-json (g/cylinder 1.0 2.0 6)) (slurp "fixtures/cylinder-golden.json"))
+      "CLJC cylinder(1,2,6) must equal the committed golden"))
 
 (let [{:keys [fail error]} (run-tests 'geometry-test)]
   (when (pos? (+ fail error))

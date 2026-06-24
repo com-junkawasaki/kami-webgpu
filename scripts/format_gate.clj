@@ -17,6 +17,7 @@
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
          '[kami.proto :as proto]
+         '[kami.capnp :as capnp]
          '[kami.graphql :as gql]
          '[kami.json :as kjson]
          '[kami.re :as kre]
@@ -147,6 +148,19 @@
                    [:interface :Node [:field :id :ID!]]
                    [:enum :Role :ADMIN :USER]))
            (shell {:out :string :err :string} "node" "scripts/graphql_validate.js" (path "schema.graphql"))
+           true)}
+
+   {:name "capnp → capnp compile" :tool "capnp" :hint "brew install capnp"
+    :run (fn []
+           (spit (path "schema.capnp")
+                 (capnp/capnp "0xdbb9ad1f14bf0b36"
+                              [:struct :Person
+                               [:field :name 0 :Text] [:field :id 1 :UInt32]
+                               [:field :phones 2 [:List :PhoneNumber]]
+                               [:struct :PhoneNumber [:field :number 0 :Text]
+                                [:enum :Type [:mobile 0] [:home 1]]]]
+                              [:interface :Greeter [:method :sayHello 0 {:request :Text} {:reply :Text}]]))
+           (shell {:out :string :err :string} "capnp" "compile" "-ocapnp" (path "schema.capnp"))   ;; real parse + validate
            true)}
 
    {:name "proto → protoc" :tool "protoc" :hint "brew install protobuf"

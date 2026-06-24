@@ -3,7 +3,9 @@
 ;; surface; `bb verify` runs all three (the cross-platform "everything CLJ/EDN" proof).
 {:paths ["src" "test"]
  :tasks
- {test   {:doc  "Run the .cljc domain-interpreter unit tests on the JVM (cross-platform correctness)."
+ {
+  gen-wgsl    {:doc "Write fixtures/lit-shader.wgsl from kami.shaders + report native parity." :task (load-file "scripts/gen_wgsl.clj")}
+  wgsl-parity {:doc "Check web↔native lit-shader parity (--strict throws)." :task (binding [*command-line-args* (vec *command-line-args*)] (load-file "scripts/gen_wgsl.clj"))}test   {:doc  "Run the .cljc domain-interpreter unit tests on the JVM (cross-platform correctness)."
           :task (do (load-file "test/domains_bb_test.clj")
                      (load-file "test/sprite2d_layout_test.clj")
                      (load-file "test/geometry_test.clj")

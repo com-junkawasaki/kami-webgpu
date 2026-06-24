@@ -3,6 +3,7 @@
    pin vertex/index counts, watertight index bounds, the sphere's radius invariant, and
    determinism, so the native renderer can match this fixture instead of re-deriving geometry."
   (:require [clojure.test :refer [deftest is run-tests]]
+            [clojure.string :as str]
             [kami.webgpu.geometry :as g]))
 
 (defn- mag [[x y z]] (Math/sqrt (+ (* x x) (* y y) (* z z))))
@@ -46,6 +47,17 @@
   (is (= (g/sphere 2 6 9) (g/sphere 2 6 9)))
   (is (= (g/box 1 2 3) (g/box 1 2 3)))
   (is (= (g/cylinder 1 2 8) (g/cylinder 1 2 8))))
+
+(deftest box-matches-the-cross-platform-golden
+  ;; The committed fixtures/box-golden.json is the ONE canonical box the native renderer
+  ;; (kami-webgpu-rs) also asserts against — so a divergence in EITHER language fails its test
+  ;; instead of drifting silently. This locks the CLJ side to that fixture.
+  (let [{:keys [positions normals indices]} (g/box 1 1 1)
+        verts (vec (mapcat into positions normals))
+        regenerated (str "{\"verts\":[" (str/join "," verts)
+                         "],\"indices\":[" (str/join "," indices) "]}\n")]
+    (is (= regenerated (slurp "fixtures/box-golden.json"))
+        "CLJC box(1,1,1) must equal the committed golden the native renderer matches")))
 
 (let [{:keys [fail error]} (run-tests 'geometry-test)]
   (when (pos? (+ fail error))

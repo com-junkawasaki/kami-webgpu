@@ -12,11 +12,20 @@
   (* (get-in scene [:render/sprite2d :scale] 0.34) (/ W 900.0)))
 
 (defn camera
-  "The camera anchor (player world position) for this snapshot, or [0 0]."
-  [snap]
-  (if-let [p (first (filter #(= (:tag %) "player") snap))]
-    [(nth (:pos p) 0) (nth (:pos p) 1)]
-    [0 0]))
+  "The camera anchor (world [cx cy]) for this snapshot. Default: follow the player in X and
+   Y (top-down). With `:render/sprite2d :camera {:mode :side :y x-offset}` it becomes a
+   *side-scroller* camera — follow the player in X (optionally offset so they sit left of
+   centre for look-ahead), but hold Y fixed so jumping/floating reads as rising on screen.
+   2-arg form keeps the legacy (snap-only) call working (follows both axes)."
+  ([snap] (camera nil snap))
+  ([scene snap]
+   (let [cam (get-in scene [:render/sprite2d :camera])
+         p   (first (filter #(= (:tag %) "player") snap))
+         px  (if p (nth (:pos p) 0) 0)
+         py  (if p (nth (:pos p) 1) 0)]
+     (if (= (:mode cam) :side)
+       [(+ px (or (:x-offset cam) 0)) (or (:y cam) 0)]
+       [px py]))))
 
 (defn draw-list
   "Ordered sprite draw ops for a frame, in screen space (painter order: north/far first so
@@ -26,7 +35,7 @@
   (let [cfg (:render/sprite2d scene)
         k (scale-k scene W)
         sprites (:sprites scene)
-        [px py] (camera snap)
+        [px py] (camera scene snap)
         sx (fn [x] (+ (/ W 2.0) (* (- x px) k)))
         sy (fn [y] (- (/ H 2.0) (* (- y py) k)))   ;; world +y = screen up
         aw (:awake cfg)

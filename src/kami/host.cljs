@@ -129,21 +129,55 @@
                            m))
                        es deltas))))))
 
+(defn- support-top
+  "Side-scroller ground/platform support: the highest solid top under x that a *falling*
+   (vy<=0) entity crosses from above (prevy→ny). solids: [[x0 x1 ytop …] …] (extra slots —
+   thickness/colour — are the renderer's). One-way: you pass UP through a platform, land on
+   top. Returns the y to rest on, or nil (airborne / over a pit)."
+  [solids x prevy ny vy]
+  (when (and solids (<= vy 0.0))
+    (reduce (fn [best s]
+              (let [x0 (nth s 0) x1 (nth s 1) yt (nth s 2)]
+                (if (and (>= x x0) (<= x x1) (>= prevy (- yt 1.0)) (<= ny yt)
+                         (or (nil? best) (> yt best)))
+                  yt best)))
+            nil solids)))
+
 (defn tick!
   "Run each *-tick system (dt ms as i64/BigInt) in export order, integrate velocities into
-   positions, then resolve EDN-configured layer collisions (host physics)."
+   positions, then resolve EDN-configured layer collisions (host physics).
+
+   Optional 2D platformer physics (when the state holds a :platformer config — set by the
+   host app from the scene EDN): entities whose tag is in :tags fall under :gravity (capped
+   at :terminal), and land on :solids (ground + one-way platforms). This keeps the *guest*
+   pure-constant (it only sets jump/float velocities + reads positions; gravity & collision
+   live here, since the compiled guest can't do f32 arithmetic). No config → unchanged."
   [{:keys [exports systems state cfg]} dt-ms]
-  (let [dt (js/BigInt dt-ms) dts (/ dt-ms 1000.0)]
+  (let [dt (js/BigInt dt-ms) dts (/ dt-ms 1000.0)
+        pf     (:platformer @state)
+        g      (if pf (or (:gravity pf) 0.0) 0.0)
+        term   (if pf (or (:terminal pf) -1e9) -1e9)
+        gtags  (if pf (set (:tags pf)) #{})
+        solids (when pf (:solids pf))]
     (doseq [s systems] ((aget exports s) dt))
     (swap! state update :tick inc)
     (swap! state update :ents
            (fn [ents]
              (persistent!
-               (reduce-kv (fn [m id e]
-                            (assoc! m id (assoc e :x (+ (:x e) (* (:vx e) dts))
-                                                  :y (+ (:y e) (* (:vy e) dts))
-                                                  :z (+ (:z e) (* (:vz e) dts)))))
-                          (transient {}) ents))))
+               (reduce-kv
+                 (fn [m id e]
+                   (let [nx (+ (:x e) (* (:vx e) dts))
+                         nz (+ (:z e) (* (:vz e) dts))]
+                     (if (contains? gtags (:tag e))
+                       (let [vy    (max (- (:vy e) (* g dts)) term)   ;; host gravity
+                             prevy (:y e)
+                             ny    (+ prevy (* vy dts))
+                             sup   (support-top solids nx prevy ny vy)]
+                         (if sup
+                           (assoc! m id (assoc e :x nx :z nz :y sup :vy 0.0 :grounded true))
+                           (assoc! m id (assoc e :x nx :z nz :y ny :vy vy :grounded false))))
+                       (assoc! m id (assoc e :x nx :z nz :y (+ (:y e) (* (:vy e) dts)))))))
+                 (transient {}) ents))))
     (resolve-collisions! state (or cfg phys/default-layers))))
 
 (defn snapshot

@@ -14,6 +14,7 @@
          '[kami.otio :as otio]
          '[kami.gltf :as gltf]
          '[kami.materialx :as mtlx]
+         '[kami.graphml :as graphml]
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
          '[kami.proto :as proto]
@@ -218,6 +219,17 @@
                                     ".card:hover" {:opacity 0.8 :transform "scale(1.02)"}}
                             :keyframes {:fade [[0 {:opacity 0}] [100 {:opacity 1}]]}}))
            (shell {:out :string :err :string} "esbuild" (path "style.css") "--minify")   ;; real CSS parse
+           true)}
+
+   {:name "graphml → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
+    :run (fn []
+           (spit (path "g.graphml")
+                 (graphml/graphml {:id "G" :edgedefault :directed}
+                                  [:key {:id "d0" :for :node :attr.name "label" :attr.type :string}]
+                                  [:node :a [:data "d0" "Start"]]
+                                  [:node :b]
+                                  [:edge :a :b]))
+           (shell {:out :string :err :string} "xmllint" "--noout" (path "g.graphml"))   ;; well-formedness
            true)}
 
    {:name "materialx → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"

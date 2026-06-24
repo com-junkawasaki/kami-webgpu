@@ -35,6 +35,7 @@
                      (load-file "test/cue_test.clj")
                      (load-file "test/css_test.clj")
                      (load-file "test/srt_test.clj")
+                     (load-file "test/graphml_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj"))}

@@ -7,7 +7,8 @@
 
 (defn- esc [s] (-> (str s) (str/replace "&" "&amp;") (str/replace "<" "&lt;") (str/replace ">" "&gt;")))
 (defn- esc-attr [s] (str/replace (esc s) "\"" "&quot;"))
-(defn- attrs [m] (apply str (for [[k v] m] (str " " (name k) "=\"" (esc-attr v) "\""))))
+(defn- attrs [m] (apply str (for [[k v] m]
+                              (str " " (name k) "=\"" (esc-attr (if (keyword? v) (name v) v)) "\""))))  ;; :node → node, not ":node"
 
 (declare emit)
 (defn- emit [form ind]

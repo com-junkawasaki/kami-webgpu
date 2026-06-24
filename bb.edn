@@ -6,7 +6,9 @@
  {test   {:doc  "Run the .cljc domain-interpreter unit tests on the JVM (cross-platform correctness)."
           :task (do (load-file "test/domains_bb_test.clj")
                      (load-file "test/sprite2d_layout_test.clj")
-                     (load-file "test/geometry_test.clj"))}
+                     (load-file "test/geometry_test.clj")
+                     (load-file "test/render_ir_test.clj")
+                     (load-file "test/wgsl_test.clj"))}
 
   verify {:doc     "Run every test surface: JVM .cljc + native WASM (kotoba-clj) + native renderer (kami-webgpu-rs)."
           :depends [test]

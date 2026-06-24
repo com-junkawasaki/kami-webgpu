@@ -11,7 +11,8 @@
    The heavy rasterization is the GPU's; CLJS only records light per-frame commands. This
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
-  (:require [kami.webgpu.geometry :as geom]))
+  (:require [kami.webgpu.ir :as ir]
+            [kami.shaders :as shaders]))
 
 ;; --- column-major mat4 (WebGPU/wgpu convention) ------------------------------
 
@@ -78,18 +79,20 @@
   [(js/Float32Array. (clj->js (vec (mapcat into positions normals))))
    (js/Uint16Array. (clj->js (vec indices)))])
 
-;; Unit meshes sized to the [w h] footprint scale the model matrix applies (±0.5 like the cube).
-(def ^:private geo-meshes
-  {:box      (geom/box 1 1 1)
-   :sphere   (geom/sphere 0.5 14 20)
-   :cylinder (geom/cylinder 0.5 1 20)})
+;; The :geo mesh kinds are DATA now (kami.webgpu.ir/default-geometry); the executor bakes each
+;; spec with ir/mesh-from-spec at init!. Unit meshes sized to the [w h] footprint the model
+;; matrix scales (±0.5 like the cube). Pass {:geometry {…}} to init! to add/override a kind.
 
 ;; --- shaders (WGSL is data: referenced by the render graph) -------------------
 ;; eye (camera world pos) is packed into the spare .w of sun_dir/sun_col/sky. Lighting:
 ;; hemisphere ambient + Lambert sun + Blinn-Phong specular + Fresnel rim + shadow-map PCF,
 ;; Reinhard tonemap + gamma. PBR material (metallic/roughness/emissive) is per-instance EDN.
-(def SHADER "
-struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32> };
+;; the fragment lighting is generated from data (kami.shaders/lit-fs via kami.wgsl); the
+;; struct/bindings/shadow/vertex preamble stays a template here. A bb token-equivalence gate
+;; (test/shader_test.clj) pins the generated fragment to the on-screen-verified WGSL.
+(def SHADER (str "
+struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32>,
+           light_a: vec4<f32>, light_b: vec4<f32>, light_c: vec4<f32>, light_d: vec4<f32> };
 @group(0) @binding(0) var<uniform> g: G;
 @group(0) @binding(1) var shadowMap: texture_depth_2d;
 @group(0) @binding(2) var shadowSamp: sampler_comparison;
@@ -98,8 +101,8 @@ fn shadow(wpos: vec3<f32>, ndl: f32) -> f32 {
   let ndc = lc.xyz / lc.w;
   let uv = vec2<f32>(ndc.x*0.5+0.5, 0.5-ndc.y*0.5);
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) { return 1.0; }
-  let bias = max(0.0025*(1.0-ndl), 0.0006);
-  let texel = 1.0/2048.0;
+  let bias = max(g.light_d.y*(1.0-ndl), g.light_d.z);
+  let texel = g.light_d.w;
   var lit = 0.0;
   for (var dx = -1; dx <= 1; dx++) {
     for (var dy = -1; dy <= 1; dy++) {
@@ -119,32 +122,7 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
   o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; o.wpos = world.xyz;
   o.mat = material.xyz; return o;
 }
-@fragment
-fn fs(i: VO) -> @location(0) vec4<f32> {
-  let N = normalize(i.n);
-  let L = normalize(-g.sun_dir.xyz);
-  let eye = vec3<f32>(g.sun_dir.w, g.sun_col.w, g.sky.w);
-  let V = normalize(eye - i.wpos);
-  let H = normalize(L + V);
-  let ndl = max(dot(N, L), 0.0);
-  let metallic  = clamp(i.mat.x, 0.0, 1.0);
-  let rough     = clamp(i.mat.y, 0.04, 1.0);
-  let emissive  = i.mat.z;
-  let amb = mix(vec3<f32>(0.20,0.22,0.26), g.sky.rgb*0.65, N.y*0.5+0.5);
-  let shininess = mix(4.0, 256.0, 1.0 - rough);
-  let specStr   = mix(0.25, 0.9, metallic);
-  let specTint  = mix(vec3<f32>(1.0), i.col, metallic);
-  let spec = pow(max(dot(N, H), 0.0), shininess) * specStr;
-  let rim  = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25;
-  let sh = shadow(i.wpos, ndl);
-  var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9 * (1.0 - metallic*0.7) * sh)
-        + specTint * g.sun_col.rgb * spec * sh
-        + g.sky.rgb * rim
-        + i.col * emissive;
-  c = c / (c + vec3<f32>(1.0));
-  c = pow(c, vec3<f32>(1.0/2.2));
-  return vec4<f32>(c, 1.0);
-}")
+" (shaders/lit-fs)))
 
 ;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
 (def SHADOW-WGSL "
@@ -212,7 +190,8 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
 
 (defn init!
   "Set up WebGPU on the canvas once from the render graph. Returns a Promise of a context.
-   opts (optional): {:graph <render-graph EDN>} — defaults to default-graph."
+   opts (optional): {:graph <render-graph EDN> :geometry <{:geo-kw {:type … params}} EDN>} —
+   default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
   ([canvas opts]
    (let [gpu (.-gpu js/navigator)]
@@ -236,17 +215,18 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
                              (let [b (.createBuffer device #js {:size (.-byteLength data)
                                                                 :usage (bit-or usage (.-COPY_DST U))})]
                                (.writeBuffer q b 0 data) b))
-                     ;; one vertex+index buffer per geometry kind, from the shared geometry source;
-                     ;; an instance picks a kind via :geo (default :box).
-                     geos (reduce-kv (fn [acc k m]
-                                       (let [[v i] (mesh->buffers m)]
+                     ;; one vertex+index buffer per geometry kind, baked from EDN specs
+                     ;; (ir/default-geometry + any {:geometry …} override); :geo picks a kind.
+                     geom-specs (merge ir/default-geometry (:geometry opts))
+                     geos (reduce-kv (fn [acc k spec]
+                                       (let [[v i] (mesh->buffers (ir/mesh-from-spec spec))]
                                          (assoc acc k {:vbuf (mkbuf v (.-VERTEX U))
                                                        :ibuf (mkbuf i (.-INDEX U))
                                                        :idx-count (.-length i)})))
-                                     {} geo-meshes)
+                                     {} geom-specs)
                      box (:box geos)
                      inst (.createBuffer device #js {:size (* MAX-INST 96) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
-                     gbuf (.createBuffer device #js {:size 176 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
+                     gbuf (.createBuffer device #js {:size 240 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
                      ;; samplers from EDN
                      samplers (reduce-kv (fn [m k s] (assoc m k (.createSampler device (clj->js s)))) {} (:samplers graph))
                      ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -297,19 +277,35 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
         [cxx czz] [(/ (cz 0) n) (/ (cz 1) n)]
         eye (arr3 g :eye [(+ cxx 60) 80 (+ czz 60)])
         target (arr3 g :target [cxx 0 czz])
-        vp (m4-mul (perspective (/ (* 60 js/Math.PI) 180.0) (/ w (max 1 h)) 0.5 4000.0)
+        ;; projection as data: FOV (deg) + near/far planes from globals (defaults = the old look)
+        fov (or (:fov g) 60) pnear (or (:near g) 0.5) pfar (or (:far g) 4000)
+        vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ w (max 1 h)) pnear pfar)
                    (look-at (vec eye) (vec target) [0 1 0]))
         sl (let [l (js/Math.hypot (sun-dir 0) (sun-dir 1) (sun-dir 2)) l (if (< l 1e-6) 1.0 l)]
              [(/ (sun-dir 0) l) (/ (sun-dir 1) l) (/ (sun-dir 2) l)])
+        ;; sun shadow frustum as data: ortho extent + near/far + light distance (defaults = old)
+        shd (ir/shadow (:shadow g))
+        sdist (:distance shd) sext (:extent shd)
         ltgt [cxx 0 czz]
-        leye [(- (ltgt 0) (* (sl 0) 200)) (- (ltgt 1) (* (sl 1) 200)) (- (ltgt 2) (* (sl 2) 200))]
-        light-vp (m4-mul (ortho -130 130 -130 130 1.0 420.0) (look-at leye ltgt [0 1 0]))
-        gf (js/Float32Array. 44)]   ;; vp(16) sun_dir(4) sun_col(4) sky(4) light_vp(16)
+        leye [(- (ltgt 0) (* (sl 0) sdist)) (- (ltgt 1) (* (sl 1) sdist)) (- (ltgt 2) (* (sl 2) sdist))]
+        light-vp (m4-mul (ortho (- sext) sext (- sext) sext (:near shd) (:far shd)) (look-at leye ltgt [0 1 0]))
+        ;; lighting-model coefficients as data: merge the frame's :lighting over the defaults
+        ;; (omitting it reproduces the original baked-in constants exactly — parity, no change).
+        lt (ir/lighting (:lighting g))
+        amb (arr3 lt :ambient [0.20 0.22 0.26])
+        gf (js/Float32Array. 60)]   ;; vp(16) sun_dir(4) sun_col(4) sky(4) light_vp(16) light_a/b/c/d(16)
     (.set gf vp 0)
     (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) (nth eye 0)]) 16)
     (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
     (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) (nth eye 2)]) 24)
     (.set gf light-vp 28)
+    ;; light_a = [ambient.rgb, ambient-sky] · light_b = [spec-min spec-max rim rim-power]
+    ;; light_c = [shininess-min shininess-max sun-diffuse metallic-diffuse-cut]
+    (.set gf (clj->js [(amb 0) (amb 1) (amb 2) (:ambient-sky lt)]) 44)
+    (.set gf (clj->js [(:spec-min lt) (:spec-max lt) (:rim lt) (:rim-power lt)]) 48)
+    (.set gf (clj->js [(:shininess-min lt) (:shininess-max lt) (:sun-diffuse lt) (:metallic-diffuse-cut lt)]) 52)
+    ;; light_d = [gamma, shadow-bias-slope, shadow-bias-min, shadow-texel]
+    (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt) (:shadow-texel lt)]) 56)
     (.writeBuffer queue gbuf 0 gf)
     (let [idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
       (dotimes [i (count insts)]

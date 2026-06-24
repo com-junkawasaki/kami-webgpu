@@ -62,7 +62,10 @@
   (let [[op & xs] s]
     (case op
       :let    (str "let " (ident (first xs)) " = " (expr (second xs)) ";")
-      :var    (str "var " (ident (first xs)) ": " (ident (second xs)) " = " (expr (nth xs 2)) ";")
+      :var    (if (= 3 (count xs))                       ;; [:var name type expr] — annotated
+                (str "var " (ident (first xs)) ": "
+                     (let [t (second xs)] (or (ctors t) (ident t))) " = " (expr (nth xs 2)) ";")
+                (str "var " (ident (first xs)) " = " (expr (second xs)) ";"))   ;; [:var name expr] — inferred
       :set    (str (ident (first xs)) " = " (expr (second xs)) ";")
       :return (str "return " (expr (first xs)) ";")
       :if     (str "if (" (expr (first xs)) ") {\n" (block (second xs)) "\n}"

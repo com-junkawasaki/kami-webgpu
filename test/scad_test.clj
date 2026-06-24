@@ -16,6 +16,16 @@
   (is (= "text(\"Hi\", size=8);"          (s/node [:text "Hi" {:size 8}])) "positional + named")
   (is (= "polygon([[0, 0], [10, 0], [5, 8]]);" (s/node [:polygon [[0 0] [10 0] [5 8]]]))))
 
+(deftest for-comprehension
+  (is (= "for (i = [0:5]) {\n  translate([(i * 10), 0, 0]) {\n    sphere(2);\n  }\n}"
+         (s/node [:for [:i [:range 0 5]]
+                  [:translate [[:* :i 10] 0 0] [:sphere 2]]]))
+      "range iterable + expression coordinate")
+  (is (= "for (a = [0:0.5:5]) {\n  cube(1);\n}"
+         (s/node [:for [:a [:range 0 0.5 5]] [:cube 1]])) "stepped range")
+  (is (= "for (n = [1, 2, 3]) {\n  cube(n);\n}"
+         (s/node [:for [:n [1 2 3]] [:cube :n]])) "value-list iterable"))
+
 (deftest expressions-in-args
   (is (= "cylinder(h=(h + 2), r=r);" (s/node [:cylinder {:h [:+ :h 2] :r :r}]))
       "arithmetic in a named arg (shared kami.expr), not a point")

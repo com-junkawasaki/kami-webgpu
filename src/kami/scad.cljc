@@ -17,7 +17,8 @@
      [:translate [[:* :i :step] 0 0] …]  → translate([(i * step), 0, 0]) { … }  ;; expr in a coord
      [:cylinder {:h [:+ :h 2] …}]       → cylinder(h=(h + 2), …);              ;; expr in a named arg
      [:def :wall 2]                     → wall = 2;
-     [:module :pillar [:h :r] body…]    → module pillar(h, r) { … }   (call it with [:pillar 10 2])"
+     [:module :pillar [:h :r] body…]    → module pillar(h, r) { … }   (call it with [:pillar 10 2])
+     [:for [:i [:range 0 5]] child…]    → for (i = [0:5]) { … }       ([:range a s b] → [a:s:b])"
   (:require [clojure.string :as str]
             [kami.expr :as kx]))
 
@@ -43,6 +44,15 @@
 
 (defn- child-form? [x] (and (vector? x) (keyword? (first x))))  ;; a nested solid vs. a point/size arg
 
+(defn- iter
+  "A `for` iterable → OpenSCAD range/list. [:range a b] → [a:b], [:range a s b] → [a:s:b];
+   a plain vector is a value list [1, 2, 3]; anything else passes through val*."
+  [x]
+  (cond
+    (and (vector? x) (= :range (first x))) (str "[" (str/join ":" (map val* (rest x))) "]")
+    (vector? x)                            (str "[" (str/join ", " (map val* x)) "]")
+    :else                                  (val* x)))
+
 (declare node)
 (defn- block [forms] (str/join "\n" (map #(str "  " (str/replace (node %) "\n" "\n  ")) forms)))
 
@@ -58,6 +68,8 @@
         :module (let [[nm params & body] more]
                   (str "module " (ident nm) "(" (str/join ", " (map ident params)) ") {\n"
                        (block body) "\n}"))
+        :for    (let [[[v it] & body] more]                ;; [:for [:i [:range 0 5]] child…]
+                  (str "for (" (ident v) " = " (iter it) ") {\n" (block body) "\n}"))
         :raw    (apply str more)
         ;; generic primitive / transform / boolean operator:
         (let [args     (take-while (complement child-form?) more)

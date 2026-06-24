@@ -13,7 +13,9 @@
   (is (= "a -- b;"                    (d/stmt [:-- :a :b])) "undirected edge, no attrs")
   (is (= "rankdir=\"LR\";"             (d/stmt [:graph-attr {:rankdir "LR"}])))
   (is (= "subgraph cluster_0 {\n  a -> b;\n}"
-         (d/stmt [:subgraph :cluster_0 [:-> :a :b]])) "subgraph nesting"))
+         (d/stmt [:subgraph :cluster_0 [:-> :a :b]])) "subgraph nesting")
+  (is (= "a [label=\"C:\\\\new\"];" (d/stmt [:n :a {:label "C:\\new"}]))
+      "backslash escaped (else Graphviz reads \\n as a line break)"))
 
 (deftest a-digraph-compiles
   (let [src (d/dot :digraph :G

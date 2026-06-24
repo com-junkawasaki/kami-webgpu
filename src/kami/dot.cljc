@@ -16,7 +16,9 @@
   (:require [clojure.string :as str]))
 
 (defn- id [x] (if (keyword? x) (name x) (str x)))
-(defn- aval [v] (cond (string? v)  (str \" (str/replace v "\"" "\\\"") \")
+;; escape \ first (else a label like "C:\new" is read by Graphviz as the \n / \l line-break escapes),
+;; then the quote.
+(defn- aval [v] (cond (string? v)  (str \" (-> v (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \")
                       (keyword? v) (name v)
                       :else        (str v)))
 (defn- attrs [m] (when (seq m) (str " [" (str/join ", " (for [[k v] m] (str (name k) "=" (aval v)))) "]")))

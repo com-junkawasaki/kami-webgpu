@@ -64,8 +64,9 @@
   "Render one frame of the top-down 2D view onto ctx from the scene EDN + entity snapshot.
    `shake` is an optional [dx dy] camera offset (the slap kick) applied to the world layer.
    `fx` is an optional seq of screen-space juice effects (floating text + collect particles),
-   each {:kind :text|:part :ox :oy :life :max :color (:text)} placed relative to screen centre."
-  [ctx scene snap shake fx]
+   each {:kind :text|:part :ox :oy :life :max :color (:text) (:size)} placed relative to centre.
+   `tick` is a frame counter driving idle animation (breathing scale + bob, desynced per entity)."
+  [ctx scene snap shake fx tick]
   (let [cv (.-canvas ctx) W (.-width cv) H (.-height cv)
         sky (:render/sky scene)
         cfg (:render/sprite2d scene)
@@ -94,9 +95,17 @@
           (.beginPath ctx) (.arc ctx s t (* tr k) 0 (* 2 js/Math.PI)) (.fill ctx)
           (set! (.-fillStyle ctx) "rgb(22,52,30)")
           (.beginPath ctx) (.arc ctx (- s (* tr k 0.3)) (- t (* tr k 0.3)) (* tr k 0.5) 0 (* 2 js/Math.PI)) (.fill ctx))))
-    ;; entity sprites from the pure, CLJ-tested layout (camera, variant swap, depth order)
-    (doseq [op (layout/draw-list scene snap W H)]
-      (draw-sprite! ctx (:sprite op) (:sx op) (:sy op) k))
+    ;; entity sprites from the pure, CLJ-tested layout (camera, variant swap, depth order).
+    ;; idle animation: a tick-driven breathing scale + vertical bob, phase desynced per entity so
+    ;; the world feels alive (the gorilla heaves more; the player has a lighter idle bounce).
+    (let [t (or tick 0)]
+      (doseq [op (layout/draw-list scene snap W H)]
+        (let [tag (:tag op)
+              amp (cond (= tag "gorilla") 0.07 (= tag "player") 0.035 :else 0.025)
+              ph  (* 0.013 (+ (:sx op) (:sy op)))
+              br  (+ 1.0 (* amp (js/Math.sin (+ (* t 0.11) ph))))
+              bob (* (if (= tag "gorilla") 5 3) (js/Math.sin (+ (* t 0.09) ph)))]
+          (draw-sprite! ctx (:sprite op) (:sx op) (+ (:sy op) bob) (* k br)))))
     (.restore ctx)
     ;; juice layer (screen-space, centred on the player): floating "+N" text + collect particles
     (when (seq fx)
@@ -107,7 +116,7 @@
             (set! (.-globalAlpha ctx) a)
             (set! (.-fillStyle ctx) (:color e))
             (if (= (:kind e) :text)
-              (do (set! (.-font ctx) "800 30px Nunito, system-ui, sans-serif")
+              (do (set! (.-font ctx) (str "800 " (:size e 30) "px Nunito, system-ui, sans-serif"))
                   (.fillText ctx (:text e) (+ cx (:ox e)) (+ cy (:oy e))))
               (do (.beginPath ctx)
                   (.arc ctx (+ cx (:ox e)) (+ cy (:oy e)) (* 4 a) 0 (* 2 js/Math.PI))

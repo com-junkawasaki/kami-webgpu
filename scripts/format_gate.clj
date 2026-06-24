@@ -14,6 +14,7 @@
          '[kami.gltf :as gltf]
          '[kami.materialx :as mtlx]
          '[kami.ocio :as ocio]
+         '[kami.dot :as dot]
          '[clj-yaml.core :as yamlc])
 
 (defn- have? [tool] (some? (fs/which tool)))
@@ -102,6 +103,19 @@
                              :nodes [(gltf/node {:name "root" :translation [0 1 0]})]
                              :materials [(gltf/material "red" [1 0 0 1])]}))
            (shell {:out :string :err :string} "node" "scripts/gltf_validate.js" (path "scene.gltf"))
+           true)}
+
+   {:name "dot → graphviz" :tool "dot" :hint "brew install graphviz"
+    :run (fn []
+           (spit (path "g.dot")
+                 (dot/dot :digraph :G
+                          [:graph-attr {:rankdir "LR"}]
+                          [:node {:shape :box}]
+                          [:n :a {:label "Start"}]
+                          [:n :b {:shape :circle}]
+                          [:-> :a :b {:label "go"}]
+                          [:-> :b :c]))
+           (shell {:out :string :err :string} "dot" "-Tsvg" (path "g.dot") "-o" (path "g.svg"))
            true)}
 
    {:name "materialx → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"

@@ -6,8 +6,12 @@
   (:require [clojure.string :as str]))
 
 (defn- esc [s]
-  (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")
-      (str/replace "\n" "\\n") (str/replace "\t" "\\t")))
+  ;; JSON requires the C0 control chars to be escaped; \b \f \n \r \t cover the ones that occur in
+  ;; practice. Backslash first so later replacements don't double-escape. cljc-portable (no \uXXXX).
+  (-> (str s)
+      (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")
+      (str/replace "\b" "\\b")  (str/replace "\f" "\\f")
+      (str/replace "\n" "\\n")  (str/replace "\r" "\\r") (str/replace "\t" "\\t")))
 
 (defn- kstr [k] (if (keyword? k) (name k) (str k)))
 

@@ -16,6 +16,8 @@
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
          '[kami.proto :as proto]
+         '[kami.json :as kjson]
+         '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
 (defn- have? [tool] (some? (fs/which tool)))
@@ -72,6 +74,14 @@
            (shell {:out :string :err :string} "usdcat" (path "scene.usda"))       ;; parse + round-trip
            (shell {:out :string :err :string} "usdchecker" (path "scene.usda"))   ;; full schema compliance
            true)}
+
+   {:name "json → cheshire" :tool nil :hint "(clj-native JSON round-trip — no external tool)"
+    :run (fn []
+           (let [v {:s "tab\there, quote\" back\\slash, CR\r LF\n"
+                    :nested {:n nil :t true :arr [1 2.5 "x"]}}
+                 src (kjson/json v)]
+             (spit (path "doc.json") src)
+             (= (cheshire/parse-string src true) v)))}   ;; real JSON parser must read back exactly
 
    {:name "ocio → clj-yaml" :tool nil :hint "(clj-native YAML round-trip — no Python)"
     :run (fn []

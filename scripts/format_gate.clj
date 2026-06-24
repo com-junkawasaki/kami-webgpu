@@ -28,6 +28,7 @@
          '[kami.toml :as ktoml]
          '[kami.cue :as kcue]
          '[kami.css :as kcss]
+         '[kami.html :as khtml]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
@@ -225,6 +226,19 @@
                           [:-> :a :b {:label "go"}]
                           [:-> :b :c]))
            (shell {:out :string :err :string} "dot" "-Tsvg" (path "g.dot") "-o" (path "g.svg"))
+           true)}
+
+   {:name "html → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
+    :run (fn []
+           (spit (path "p.html")
+                 (khtml/html5
+                   [:html {:lang "en"}
+                    [:head [:meta {:charset "utf-8"}] [:title "Demo"]]
+                    [:body [:h1 {:class "t"} "Hi"]
+                     [:p "Some " [:strong "bold"] " text."]
+                     [:input {:type "checkbox" :checked true}] [:br]
+                     [:img {:src "a.png" :alt "a"}]]]))
+           (shell {:out :string :err :string} "xmllint" "--html" "--noout" (path "p.html"))   ;; real HTML parse
            true)}
 
    {:name "css → esbuild" :tool "esbuild" :hint "npm i -g esbuild"

@@ -40,6 +40,7 @@
                      (load-file "test/geojson_test.clj")
                      (load-file "test/musicxml_test.clj")
                      (load-file "test/step_test.clj")
+                     (load-file "test/html_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj"))}

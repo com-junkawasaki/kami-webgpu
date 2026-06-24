@@ -12,8 +12,16 @@
 (defn- pad [n] (apply str (repeat n "  ")))
 (defn- scalar? [x] (or (string? x) (number? x) (boolean? x) (keyword? x) (nil? x)))
 
-(defn- needs-quote? [s]
-  (or (= "" s) (re-find #"[:#\[\]{}&*!|>'\"%@`,]" s) (re-find #"(?i)^(yes|no|true|false|null|~)$" s)
+(defn- needs-quote?
+  "True when a string would be mis-read as a non-string YAML scalar (or has structural chars) and so
+   must be quoted to round-trip AS a string. Covers booleans/null, numeric-looking strings (\"1.5\",
+   \"42\", \"1e3\", \"0xff\", .inf/.nan — these would parse as numbers), and indicator/whitespace chars."
+  [s]
+  (or (= "" s)
+      (re-find #"[:#\[\]{}&*!|>'\"%@`,]" s)
+      (re-find #"(?i)^(yes|no|true|false|null|~|\.inf|\.nan)$" s)
+      (re-find #"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$" s)   ;; int/float/sci → would coerce to a number
+      (re-find #"(?i)^0[xob][0-9a-f]+$" s)                     ;; hex / octal / binary literal
       (re-find #"^[\s>?-]" s) (re-find #"\s$" s)))
 (defn- scalar [x]
   (cond

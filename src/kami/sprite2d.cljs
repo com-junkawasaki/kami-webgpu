@@ -62,8 +62,10 @@
 
 (defn draw-2d!
   "Render one frame of the top-down 2D view onto ctx from the scene EDN + entity snapshot.
-   `shake` is an optional [dx dy] camera offset (the slap kick) applied to the world layer."
-  [ctx scene snap shake]
+   `shake` is an optional [dx dy] camera offset (the slap kick) applied to the world layer.
+   `fx` is an optional seq of screen-space juice effects (floating text + collect particles),
+   each {:kind :text|:part :ox :oy :life :max :color (:text)} placed relative to screen centre."
+  [ctx scene snap shake fx]
   (let [cv (.-canvas ctx) W (.-width cv) H (.-height cv)
         sky (:render/sky scene)
         cfg (:render/sprite2d scene)
@@ -95,7 +97,22 @@
     ;; entity sprites from the pure, CLJ-tested layout (camera, variant swap, depth order)
     (doseq [op (layout/draw-list scene snap W H)]
       (draw-sprite! ctx (:sprite op) (:sx op) (:sy op) k))
-    (.restore ctx)))
+    (.restore ctx)
+    ;; juice layer (screen-space, centred on the player): floating "+N" text + collect particles
+    (when (seq fx)
+      (let [cx (/ W 2) cy (/ H 2)]
+        (set! (.-textAlign ctx) "center")
+        (doseq [e fx]
+          (let [a (max 0 (/ (:life e) (:max e)))]
+            (set! (.-globalAlpha ctx) a)
+            (set! (.-fillStyle ctx) (:color e))
+            (if (= (:kind e) :text)
+              (do (set! (.-font ctx) "800 30px Nunito, system-ui, sans-serif")
+                  (.fillText ctx (:text e) (+ cx (:ox e)) (+ cy (:oy e))))
+              (do (.beginPath ctx)
+                  (.arc ctx (+ cx (:ox e)) (+ cy (:oy e)) (* 4 a) 0 (* 2 js/Math.PI))
+                  (.fill ctx)))))
+        (set! (.-globalAlpha ctx) 1)))))
 
 (defn draw-portrait!
   "Draw a single sprite centred in ctx (for the title card character art)."

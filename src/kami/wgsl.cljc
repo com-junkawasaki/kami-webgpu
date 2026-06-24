@@ -17,8 +17,13 @@
    Top level:
      (func :fs {:stage :fragment :params [[:i :VO]] :ret [:loc 0 [:vec4 :f32]]} stmt…)
      (struct* :VO [[:clip [:vec4 :f32] {:builtin :position}] [:n [:vec3 :f32] {:location 0}] …])
-     (binding* {:group 0 :binding 0 :space :uniform} :g :G)   (shader item…)"
-  (:require [clojure.string :as str]))
+     (binding* {:group 0 :binding 0 :space :uniform} :g :G)   (shader item…)
+
+   Arithmetic/calls come from the shared kami.expr core; WGSL only customises the surface — idents are
+   kebab→snake, integral literals get a `.0` (f32), vecN/matN heads become typed constructors, and the
+   `:i`/`:.` forms (raw int, swizzle-on-expr) are WGSL-specific `:special`s."
+  (:require [clojure.string :as str]
+            [kami.expr :as kx]))
 
 (defn- ident [s] (str/replace (name s) "-" "_"))
 
@@ -28,10 +33,6 @@
   (let [s (str n)]
     (if (or (str/includes? s ".") (str/includes? s "e")) s (str s ".0"))))
 
-(def ^:private binops
-  {:+ "+" :- "-" :* "*" :/ "/" :% "%"
-   :< "<" :> ">" :<= "<=" :>= ">=" :== "==" :!= "!=" :&& "&&" :|| "||"})
-
 (def ^:private ctors {:vec2 "vec2<f32>" :vec3 "vec3<f32>" :vec4 "vec4<f32>"
                       :mat3 "mat3x3<f32>" :mat4 "mat4x4<f32>"})
 
@@ -40,27 +41,18 @@
         (vector? t) (or (ctors (first t)) (ident (first t)))   ;; [:vec4 :f32] → vec4<f32>
         :else       (or (ctors t) (ident t))))                 ;; :mat4 → mat4x4<f32>, :G → G
 
-(declare expr)
-(defn- arglist [xs] (str/join ", " (map expr xs)))
+(defn- wgsl-call [op args]                ;; vecN/matN → typed ctor; else plain (kebab→snake) call
+  (str (or (ctors op) (ident op)) "(" (str/join ", " args) ")"))
+
+(defn- wgsl-special [op xs go]
+  (case op
+    :i  (str (first xs))                                    ;; raw integer literal (no f32 coercion)
+    :.  (str "(" (go (first xs)) ")." (ident (second xs)))  ;; field/swizzle on a sub-expression
+    nil))
 
 (defn expr
   "Compile an EDN expression to a WGSL expression string."
-  [e]
-  (cond
-    (number? e)  (num e)
-    (string? e)  e                         ;; raw WGSL passthrough (escape hatch)
-    (or (keyword? e) (symbol? e)) (ident e) ;; var / field path / swizzle
-    (vector? e)
-    (let [[op & xs] e]
-      (cond
-        (= :i op)   (str (first xs))                              ;; raw integer literal
-        (= :. op)   (str "(" (expr (first xs)) ")." (ident (second xs)))  ;; field/swizzle on expr
-        (binops op) (if (= 1 (count xs))
-                      (str "(" (binops op) (expr (first xs)) ")")           ;; unary (e.g. -x)
-                      (str "(" (str/join (str " " (binops op) " ") (map expr xs)) ")"))
-        (ctors op)  (str (ctors op) "(" (arglist xs) ")")
-        :else       (str (ident op) "(" (arglist xs) ")")))                 ;; function call
-    :else (str e)))
+  [e] (kx/compile {:ident ident :num num :call wgsl-call :special wgsl-special} e))
 
 (declare stmt)
 (defn- block [stmts] (str/join "\n" (map #(str "  " (str/replace (stmt %) "\n" "\n  ")) stmts)))

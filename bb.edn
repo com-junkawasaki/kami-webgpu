@@ -9,6 +9,8 @@
                      (load-file "test/geometry_test.clj")
                      (load-file "test/render_ir_test.clj")
                      (load-file "test/wgsl_test.clj")
+                     (load-file "test/scad_test.clj")
+                     (load-file "test/verilog_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj"))}
 

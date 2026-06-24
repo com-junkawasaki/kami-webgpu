@@ -99,6 +99,8 @@
                (nil? ret) nil
                (and (vector? ret) (= :loc (first ret)))
                (str "@location(" (second ret) ") " (type-str (nth ret 2)))
+               (and (vector? ret) (= :builtin (first ret)))
+               (str "@builtin(" (ident (second ret)) ") " (type-str (nth ret 2)))
                :else (type-str ret))]
     (str (when stage (str "@" (ident stage) "\n"))
          "fn " (ident name) "(" (str/join ", " (map param-str params)) ")"

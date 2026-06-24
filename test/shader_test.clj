@@ -83,6 +83,22 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
   (is (= (canon (str golden-preamble "\n" golden-fs)) (canon (sh/lit-shader)))
       "the whole kami.wgsl-generated shader (struct/bindings/shadow/vertex/fragment) is token-equivalent to the shipped WGSL"))
 
+;; the depth-only shadow pass (vertex from the sun's POV).
+(def golden-shadow
+  "struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> g: G;
+@vertex
+fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
+      @location(2) m0: vec4<f32>, @location(3) m1: vec4<f32>, @location(4) m2: vec4<f32>, @location(5) m3: vec4<f32>,
+      @location(6) color: vec4<f32>, @location(7) material: vec4<f32>) -> @builtin(position) vec4<f32> {
+  let model = mat4x4<f32>(m0, m1, m2, m3);
+  return g.light_vp * model * vec4<f32>(pos, 1.0);
+}")
+
+(deftest shadow-shader-matches-the-shipped-shader
+  (is (= (canon golden-shadow) (canon (sh/shadow-shader)))
+      "the kami.wgsl-generated depth pass is token-equivalent to the shipped SHADOW-WGSL"))
+
 (let [{:keys [fail error]} (run-tests 'shader-test)]
   (when (pos? (+ fail error))
     (throw (ex-info "shader gate failed" {:fail fail :error error}))))

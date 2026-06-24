@@ -77,6 +77,25 @@
    [:set :o.mat :material.xyz]
    [:return :o]])
 
+;; ── the depth-only shadow pass: instances from the sun's POV into the shadow map ──────────────────
+;; only needs vp..light_vp (the first 5 G fields), not the lighting tunables.
+(def shadow-vs-body
+  [[:let :model [:mat4 :m0 :m1 :m2 :m3]]
+   [:return [:* :g.light-vp :model [:vec4 :pos 1.0]]]])
+
+(defn shadow-shader
+  "The depth-only shadow-map vertex pass, generated from data."
+  []
+  (w/shader
+   (w/struct* :G (vec (take 5 G-fields)))
+   (w/binding* {:group 0 :binding 0 :space :uniform} :g :G)
+   (apply w/func :vs {:stage :vertex
+                      :params [[:pos [:vec3 :f32] {:location 0}] [:normal [:vec3 :f32] {:location 1}]
+                               [:m0 [:vec4 :f32] {:location 2}] [:m1 [:vec4 :f32] {:location 3}]
+                               [:m2 [:vec4 :f32] {:location 4}] [:m3 [:vec4 :f32] {:location 5}]
+                               [:color [:vec4 :f32] {:location 6}] [:material [:vec4 :f32] {:location 7}]]
+                      :ret [:builtin :position [:vec4 :f32]]} shadow-vs-body)))
+
 (defn lit-shader
   "The complete lit instanced renderer WGSL — generated entirely from data (struct/bindings/shadow/
    vertex/fragment). One source; the web (kami.webgpu) and, in time, native run the same shader."

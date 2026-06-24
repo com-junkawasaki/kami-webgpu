@@ -15,6 +15,10 @@
 (def ^:private void
   #{:area :base :br :col :embed :hr :img :input :link :meta :param :source :track :wbr})
 
+;; raw-text elements: their content is NOT HTML (browsers don't decode entities inside them), so the JS
+;; / CSS must be emitted verbatim — escaping `a < b` to `a &lt; b` would corrupt it.
+(def ^:private raw-text #{:script :style})
+
 (defn- esc [s] (-> (str s) (str/replace "&" "&amp;") (str/replace "<" "&lt;") (str/replace ">" "&gt;")))
 (defn- esc-attr [s] (str/replace (esc s) "\"" "&quot;"))
 (defn- attrs [m]
@@ -37,6 +41,7 @@
           open     (str "<" (name tag) (attrs attr) ">")]
       (cond
         (void tag)              open                                        ;; <br>, <img …> — no close
+        (raw-text tag)          (str open (apply str children) "</" (name tag) ">")  ;; verbatim JS/CSS
         (empty? children)       (str open "</" (name tag) ">")
         (some string? children) (str open (apply str (map elem children)) "</" (name tag) ">")  ;; inline
         :else                   (str open "\n" (block children) "\n</" (name tag) ">")))))       ;; block

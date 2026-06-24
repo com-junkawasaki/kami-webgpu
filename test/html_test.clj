@@ -21,6 +21,14 @@
   (is (= "<a title=\"x&quot;y\">t</a>" (h/html [:a {:title "x\"y"} "t"])) "attr quote escaped")
   (is (str/starts-with? (h/html5 [:html [:body "hi"]]) "<!DOCTYPE html>\n<html>") "doctype prepended"))
 
+(deftest raw-text-elements
+  ;; script/style content must NOT be HTML-escaped — browsers don't decode entities inside them.
+  (is (= "<script>if (a < b && c > d) x();</script>"
+         (h/html [:script "if (a < b && c > d) x();"])) "JS emitted verbatim, not escaped")
+  (is (= "<style>.a > .b { color: red }</style>"
+         (h/html [:style ".a > .b { color: red }"])) "CSS combinator > kept verbatim")
+  (is (= "<p>a &lt; b</p>" (h/html [:p "a < b"])) "ordinary text is still escaped"))
+
 (deftest nested-block-indents
   (is (= "<ul>\n  <li>a</li>\n  <li>b</li>\n</ul>"
          (h/html [:ul [:li "a"] [:li "b"]])) "element-only children block-indent"))

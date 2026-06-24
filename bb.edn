@@ -14,6 +14,7 @@
                      (load-file "test/scad_test.clj")
                      (load-file "test/verilog_test.clj")
                      (load-file "test/spirv_test.clj")
+                     (load-file "test/kicad_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj"))}
 

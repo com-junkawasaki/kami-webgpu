@@ -34,7 +34,10 @@
     (if (or (str/includes? s ".") (str/includes? s "e")) s (str s ".0"))))
 
 (def ^:private ctors {:vec2 "vec2<f32>" :vec3 "vec3<f32>" :vec4 "vec4<f32>"
-                      :mat3 "mat3x3<f32>" :mat4 "mat4x4<f32>"})
+                      :mat3 "mat3x3<f32>" :mat4 "mat4x4<f32>"
+                      ;; short type spellings (WGSL aliases) — used by the kami-render shaders
+                      :vec2f "vec2f" :vec3f "vec3f" :vec4f "vec4f"
+                      :mat3x3f "mat3x3f" :mat4x4f "mat4x4f"})
 
 (defn- type-str [t]
   (cond (string? t) t                                    ;; exotic types (texture_depth_2d…) pass through

@@ -9,7 +9,10 @@
          '[kami.spirv :as spirv]
          '[kami.kicad :as kicad]
          '[kami.spice :as spice]
-         '[kami.usd :as usd])
+         '[kami.usd :as usd]
+         '[kami.otio :as otio]
+         '[kami.gltf :as gltf]
+         '[kami.materialx :as mtlx])
 
 (defn- have? [tool] (some? (fs/which tool)))
 
@@ -61,6 +64,38 @@
                              [:attr "double" :radius 2]
                              [:attr "color3f[]" "primvars:displayColor" [[1 0 0]]]]]))
            (shell {:out :string :err :string} "usdcat" (path "scene.usda"))   ;; full parse + round-trip
+           true)}
+
+   {:name "otio → otiocat" :tool "otiocat" :hint "pipx install opentimelineio"
+    :run (fn []
+           (spit (path "cut.otio")
+                 (otio/otio (otio/timeline "cut"
+                              (otio/track "V1" :video
+                                (otio/clip "s1" {:from 0 :dur 48 :rate 24} (otio/external "s1.mov"))
+                                (otio/gap {:dur 12 :rate 24})
+                                (otio/clip "s2" {:from 0 :dur 24 :rate 24} (otio/external "s2.mov"))))))
+           (shell {:out :string :err :string} "otiocat" (path "cut.otio"))   ;; parse + round-trip
+           true)}
+
+   {:name "gltf → gltf-validator" :tool "node" :hint "node (+ npm i -g gltf-validator for full check)"
+    :run (fn []
+           (spit (path "scene.gltf")
+                 (gltf/gltf {:generator "kami"}
+                            {:scene 0 :scenes [{:nodes [0]}]
+                             :nodes [(gltf/node {:name "root" :translation [0 1 0]})]
+                             :materials [(gltf/material "red" [1 0 0 1])]}))
+           (shell {:out :string :err :string} "node" "scripts/gltf_validate.js" (path "scene.gltf"))
+           true)}
+
+   {:name "materialx → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
+    :run (fn []
+           (spit (path "mat.mtlx")
+                 (mtlx/materialx {:version "1.38"}
+                                 [:nodegraph {:name "NG_red"}
+                                  [:constant {:name "c1" :type "color3"}
+                                   [:input {:name "value" :type "color3" :value (mtlx/value [1 0 0])}]]
+                                  [:output {:name "out" :type "color3" :nodename "c1"}]]))
+           (shell {:out :string :err :string} "xmllint" "--noout" (path "mat.mtlx"))   ;; well-formedness
            true)}
 
    {:name "spice → ngspice" :tool "ngspice" :hint "brew install ngspice"

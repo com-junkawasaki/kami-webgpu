@@ -21,6 +21,12 @@
   (is (= ".model NMOS NMOS (vto=0.7 kp=120u)"
          (sp/stmt [:model :NMOS :NMOS {:vto "0.7" :kp "120u"}]))))
 
+(deftest subcircuits-and-include
+  (is (= ".subckt inv in out vdd"  (sp/stmt [:subckt :inv :in :out :vdd])) "subcircuit definition")
+  (is (= ".ends inv"               (sp/stmt [:ends :inv])) "subcircuit end")
+  (is (= "X1 a y vdd inv"          (sp/stmt [:x 1 :a :y :vdd "inv"])) "subcircuit instantiation")
+  (is (= ".include models.lib"     (sp/stmt [:include "models.lib"])) "include directive"))
+
 (deftest an-rc-deck-compiles
   (let [src (sp/netlist "RC low-pass"
               [:v 1 :in :gnd [:dc 5]]

@@ -96,9 +96,7 @@
         cfg (:render/sprite2d scene)
         k   (* (get cfg :scale 0.34) (/ W 900.0))          ;; world→screen, density-independent
         sprites (:sprites scene)
-        player (first (filter #(= (:tag %) "player") snap))
-        px (if player (nth (:pos player) 0) 0)
-        py (if player (nth (:pos player) 1) 0)
+        [px py] (layout/camera scene snap)   ;; side-scroller camera supported (EDN :camera)
         sx (fn [x] (+ (/ W 2) (* (- x px) k)))
         sy (fn [y] (- (/ H 2) (* (- y py) k)))]   ;; world +y = screen up (W moves you up)
     ;; sky → ground wash
@@ -109,6 +107,18 @@
     ;; world layer (trees + characters) shakes on impact; the sky/ground wash above stays put
     (.save ctx)
     (when shake (.translate ctx (nth shake 0) (nth shake 1)))
+    ;; side-scroller level geometry: the EDN :platformer :solids (ground + one-way platforms)
+    ;; drawn camera-relative as earth blocks with a grass top — the same list the host lands on.
+    ;; A solid is [x0 x1 ytop thickness fill? top?]; defaults give brown earth + green grass.
+    (doseq [s (get-in scene [:platformer :solids])]
+      (let [x0 (nth s 0) x1 (nth s 1) yt (nth s 2) th (nth s 3 4000)
+            fill (nth s 4 [0.42 0.30 0.20]) top (nth s 5 [0.40 0.74 0.34])
+            L (sx x0) R (sx x1) T (sy yt) B (sy (- yt th))]
+        (when (and (< L (+ W 240)) (> R -240))
+          (set! (.-fillStyle ctx) (css fill))
+          (.fillRect ctx L T (- R L) (- B T))
+          (set! (.-fillStyle ctx) (css top))             ;; grass band along the top surface
+          (.fillRect ctx L (- T (* 6 k)) (- R L) (* 26 k)))))
     ;; trees (behind characters), faded by the night
     (doseq [[tx ty tr] (trees (get cfg :tree-spread 4200) (get cfg :tree-count 90))]
       (let [s (sx tx) t (sy ty)]

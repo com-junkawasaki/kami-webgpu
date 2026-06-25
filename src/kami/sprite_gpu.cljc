@@ -19,31 +19,62 @@
 (defn prim->quad
   "One sprite primitive `[kind props]` at entity centre [ex ey] → a GPU quad instance.
    props use the sprite2d vocabulary: :dx/:dy offset, :r (circle), :rx/:ry (ellipse/arc), :w/:h
-   (rect), :fill colour. Returns {:pos :size :rot :shape :color} (size = half-extents)."
-  [[ex ey] [kind {:keys [dx dy r rx ry w h rot fill]}]]
+   (rect), :fill colour, optional :anim. Returns {:pos :size :rot :shape :color} (size = half-extents),
+   carrying :anim when present so anim-quad can drive it per frame."
+  [[ex ey] [kind {:keys [dx dy r rx ry w h rot fill] :as props}]]
   (let [[sw sh] (case kind
                   :circle  [(or r 1.0)  (or r 1.0)]
                   :ellipse [(or rx 1.0) (or ry 1.0)]
                   :rect    [(or w 1.0)  (or h 1.0)]
                   :arc     [(or rx r 1.0) (or ry r 1.0)]
                   [(or r rx 1.0) (or r ry 1.0)])]
-    {:pos   [(+ ex (or dx 0.0)) (+ ey (or dy 0.0))]
-     :size  [sw sh]
-     :rot   (or rot 0.0)
-     :shape (get shapes kind 0)
-     :color (rgba fill)}))
+    (cond-> {:pos   [(+ ex (or dx 0.0)) (+ ey (or dy 0.0))]
+             :size  [sw sh]
+             :rot   (or rot 0.0)
+             :shape (get shapes kind 0)
+             :color (rgba fill)}
+      (:anim props) (assoc :anim (:anim props)))))
+
+(defn- wave [t ph [a f]] (* (double a) (#?(:clj Math/sin :cljs js/Math.sin) (+ (* (double t) (double f)) (double ph)))))
+
+(defn anim-quad
+  "Apply a primitive's data-declared :anim (sprite2d vocabulary — {:rot :pulse :bob :sway [amp freq]})
+   to its quad at time `t` with per-entity phase `ph`, mirroring kami.sprite2d's tick-driven motion:
+   pulse scales, rot rotates, bob/sway translate (in the rotated+scaled frame). nil :anim ⇒ unchanged.
+   This is the GPU-2D parity for Canvas2D's per-part animation — motion stays data, no renderer code."
+  [t ph an quad]
+  (if (nil? an)
+    quad
+    (let [rot   (if (:rot an)   (wave t ph (:rot an))   0.0)
+          pulse (if (:pulse an) (wave t ph (:pulse an)) 0.0)
+          s     (+ 1.0 pulse)
+          bob   (if (:bob an)   (wave t ph (:bob an))   0.0)
+          sway  (if (:sway an)  (wave t ph (:sway an))  0.0)
+          c (#?(:clj Math/cos :cljs js/Math.cos) rot) sn (#?(:clj Math/sin :cljs js/Math.sin) rot)
+          ox (* s (- (* sway c) (* bob sn)))            ;; offset = R(rot)·s·(sway,bob)
+          oy (* s (+ (* sway sn) (* bob c)))
+          [px py] (:pos quad) [sw sh] (:size quad)]
+      (assoc quad :pos  [(+ px ox) (+ py oy)]
+                  :size [(* sw s) (* sh s)]
+                  :rot  (+ (:rot quad) rot)))))
 
 (defn prims->quads
   "A sprite recipe (vector of `[kind props]` primitives) at entity centre → a vector of GPU quad
-   instances. Painter order is preserved (later primitives draw on top)."
-  [center prims]
-  (mapv #(prim->quad center %) prims))
+   instances. Painter order is preserved. With `t` (+ per-entity phase `ph`), each primitive's :anim
+   is applied (tick-driven motion); without it, the static quads."
+  ([center prims] (prims->quads center prims nil 0))
+  ([center prims t ph]
+   (mapv (fn [p] (let [q (prim->quad center p)]
+                   (if t (anim-quad t ph (:anim q) q) q)))
+         prims)))
 
 (defn draw-ops->quads
-  "Flatten a kami.sprite2d.layout draw-list (ops {:sprite [prims…] :sx :sy}) into one flat quad
-   instance array for a single instanced draw — the whole 2D frame as GPU sprite instances."
-  [ops]
-  (into [] (mapcat (fn [{:keys [sprite sx sy]}] (prims->quads [sx sy] sprite)) ops)))
+  "Flatten a kami.sprite2d.layout draw-list (ops {:sprite [prims…] :sx :sy :ph?}) into one flat quad
+   instance array for a single instanced draw — the whole 2D frame as GPU sprite instances. With `t`,
+   each op's :anim primitives animate (op :ph desyncs identical sprites)."
+  ([ops] (draw-ops->quads ops nil))
+  ([ops t]
+   (into [] (mapcat (fn [{:keys [sprite sx sy ph]}] (prims->quads [sx sy] sprite t (or ph 0))) ops))))
 
 (defn pack-instances
   "Pack quad instances into a flat f32 array for the GPU vertex buffer, 8 floats per instance:

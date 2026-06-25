@@ -26,6 +26,22 @@
       (is (= 3 (count flat)) "all primitives across all entities → one instanced draw")
       (is (= 36 (count (sg/pack-instances flat))) "12 floats per instance, GPU-buffer-ready"))))
 
+(defn- close? [a b] (< (Math/abs (- (double a) (double b))) 1e-6))
+
+(deftest anim-drives-the-quad
+  ;; GPU-2D parity with kami.sprite2d's per-part :anim — pulse/rot/bob/sway as data, no renderer code.
+  (let [q  {:pos [100.0 100.0] :size [20.0 20.0] :rot 0.0 :shape 0 :color [1 1 1 1]}
+        hp (/ Math/PI 2.0)]   ;; tick·freq + ph = π/2 → sin = 1, so wave = amplitude
+    (is (close? 110.0 (second (:pos (sg/anim-quad hp 0 {:bob  [10 1]} q)))) "bob translates +y by amp")
+    (is (close? 110.0 (first  (:pos (sg/anim-quad hp 0 {:sway [10 1]} q)))) "sway translates +x by amp")
+    (is (close? 24.0  (first  (:size (sg/anim-quad hp 0 {:pulse [0.2 1]} q)))) "pulse scales size by 1+amp")
+    (is (close? 0.5   (:rot   (sg/anim-quad hp 0 {:rot [0.5 1]} q)))         "rot adds amp radians")
+    (is (= q (sg/anim-quad hp 0 nil q)) "no :anim ⇒ identity")
+    ;; the converter carries :anim through, and draw-ops->quads animates with t
+    (let [ops [{:sprite [[:circle {:r 5 :dy 0 :fill [1 0 0] :anim {:bob [8 1]}}]] :sx 0 :sy 0}]]
+      (is (close? 8.0 (second (:pos (first (sg/draw-ops->quads ops hp))))) "draw-ops->quads applies :anim at t")
+      (is (zero? (second (:pos (first (sg/draw-ops->quads ops))))) "no t ⇒ static (anim not applied)"))))
+
 (let [{:keys [fail error]} (run-tests 'sprite-gpu-test)]
   (when (pos? (+ fail error))
     (throw (ex-info "sprite-gpu tests failed" {:fail fail :error error}))))

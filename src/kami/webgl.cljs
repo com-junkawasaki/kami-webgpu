@@ -114,6 +114,29 @@
 ;; color(loc6,vec4) material(loc7,vec4), divisor 1 — 24 f32 / instance, the kami.webgpu layout.
 (def ^:private SHADOW-FS "#version 300 es\nprecision highp float;\nvoid main() {}")   ;; depth-only
 
+(defn scene-renderer
+  "Build a whole-2D-frame draw fn from the embedded GLSL: a sky gradient pass (fullscreen triangle)
+   then the instanced sprite/text quad pass. (render! {:sky {:zenith :ground} :quads [...]} [w h])
+   draws the full kami.scene2d frame on the GPU — the Canvas2D draw-2d! replacement."
+  [gl]
+  (let [sky-prog (program gl glsl/sky-vert glsl/sky-frag)
+        sky-ub   (.createBuffer gl)
+        sky-blk  (.getUniformBlockIndex gl sky-prog "SU_block_0Fragment")
+        draw!    (sprite-renderer gl)]
+    (when (not= sky-blk (.-INVALID_INDEX gl)) (.uniformBlockBinding gl sky-prog sky-blk 0))
+    (fn render-frame! [{:keys [sky quads]} [w h]]
+      (.viewport gl 0 0 w h)
+      ;; sky gradient pass
+      (.useProgram gl sky-prog)
+      (.bindBuffer gl (.-UNIFORM_BUFFER gl) sky-ub)
+      (.bufferData gl (.-UNIFORM_BUFFER gl)
+                   (js/Float32Array. (clj->js (concat (:zenith sky) (:ground sky)))) (.-DYNAMIC_DRAW gl))
+      (.bindBufferBase gl (.-UNIFORM_BUFFER gl) 0 sky-ub)
+      (.disable gl (.-BLEND gl))
+      (.drawArrays gl (.-TRIANGLES gl) 0 3)
+      ;; sprites + text, blended over the sky
+      (draw! quads [w h]))))
+
 (defn- mesh-vao [gl vbuf ibuf inst]
   (let [vao (.createVertexArray gl)]
     (.bindVertexArray gl vao)

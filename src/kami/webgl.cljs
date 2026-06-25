@@ -103,6 +103,77 @@
     (.clearColor gl r g b a) (.clear gl (.-COLOR_BUFFER_BIT gl)))
   (draw-sprites! quad-instances [w h]))
 
-;; the 3D lit/shadow passes follow the same shape: program(lit.vert/.frag) + a depth-texture
-;; framebuffer for the shadow pass + per-frame globals in a std140 block, resolved through
-;; (gpu/resolve-for :webgl2 graph). Wired identically to kami.webgpu, on the WebGL2 API.
+;; ── 3D lit + shadow pass (instanced meshes, depth-FBO shadow map) ──────────────────────────────
+;; Mirrors kami.webgpu's two-pass lit path on the WebGL2 API. The matrix math (camera→vp, sun→
+;; light_vp) is shared with WebGPU and computed by the caller, who hands us the packed G uniform
+;; (60 f32: vp[16] sun_dir[4] sun_col[4] sky[4] light_vp[16] light_a..d[16]) — identical to the
+;; native `gf` array, so the render is the same. We own the GLSL plumbing: programs, the depth
+;; framebuffer, the mesh + instance buffers, and the shadow→main draw order.
+;; mesh attrs: pos(loc0,vec3) normal(loc1,vec3), divisor 0. instance attrs: m0..m3(loc2-5,vec4)
+;; color(loc6,vec4) material(loc7,vec4), divisor 1 — 24 f32 / instance, the kami.webgpu layout.
+(def ^:private SHADOW-FS "#version 300 es\nprecision highp float;\nvoid main() {}")   ;; depth-only
+
+(defn- mesh-vao [gl vbuf ibuf inst]
+  (let [vao (.createVertexArray gl)]
+    (.bindVertexArray gl vao)
+    (.bindBuffer gl (.-ARRAY_BUFFER gl) vbuf)                       ;; interleaved pos(3)+normal(3) = 24B
+    (doseq [[loc off] [[0 0] [1 12]]]
+      (.enableVertexAttribArray gl loc) (.vertexAttribPointer gl loc 3 (.-FLOAT gl) false 24 off))
+    (.bindBuffer gl (.-ELEMENT_ARRAY_BUFFER gl) ibuf)
+    (.bindBuffer gl (.-ARRAY_BUFFER gl) inst)                       ;; 24 f32 / instance, stride 96
+    (doseq [[loc off] [[2 0] [3 16] [4 32] [5 48] [6 64] [7 80]]]
+      (.enableVertexAttribArray gl loc)
+      (.vertexAttribPointer gl loc 4 (.-FLOAT gl) false 96 off)
+      (.vertexAttribDivisor gl loc 1))
+    (.bindVertexArray gl nil) vao))
+
+(defn- depth-fbo [gl size]
+  (let [tex (.createTexture gl) fbo (.createFramebuffer gl)]
+    (.bindTexture gl (.-TEXTURE_2D gl) tex)
+    (.texImage2D gl (.-TEXTURE_2D gl) 0 (.-DEPTH_COMPONENT32F gl) size size 0
+                 (.-DEPTH_COMPONENT gl) (.-FLOAT gl) nil)
+    (doseq [[k v] [[(.-TEXTURE_MIN_FILTER gl) (.-LINEAR gl)] [(.-TEXTURE_MAG_FILTER gl) (.-LINEAR gl)]
+                   [(.-TEXTURE_COMPARE_MODE gl) (.-COMPARE_REF_TO_TEXTURE gl)]
+                   [(.-TEXTURE_COMPARE_FUNC gl) (.-LEQUAL gl)]]]
+      (.texParameteri gl (.-TEXTURE_2D gl) k v))
+    (.bindFramebuffer gl (.-FRAMEBUFFER gl) fbo)
+    (.framebufferTexture2D gl (.-FRAMEBUFFER gl) (.-DEPTH_ATTACHMENT gl) (.-TEXTURE_2D gl) tex 0)
+    (.bindFramebuffer gl (.-FRAMEBUFFER gl) nil)
+    {:tex tex :fbo fbo :size size}))
+
+(defn lit-renderer
+  "Build the 3D lit+shadow draw for this WebGL2 context. `shaders` {:lit {:vert :frag} :shadow {:vert}}
+   are the GLSL ES 3.00 from bb gen-glsl. Returns (draw! packed-G mesh instances [w h]) where mesh is
+   {:vbuf :ibuf :count}, instances a Float32Array (24 f32/instance) with metadata :count on the map
+   passed as the 3rd-arg wrapper {:buf :count}."
+  [gl shaders & [{:keys [shadow-size] :or {shadow-size 2048}}]]
+  (let [lit-p (program gl (get-in shaders [:lit :vert]) (get-in shaders [:lit :frag]))
+        shd-p (program gl (get-in shaders [:shadow :vert]) SHADOW-FS)
+        sm    (depth-fbo gl shadow-size)
+        gbuf  (.createBuffer gl)
+        ibuf  (.createBuffer gl)
+        bind-g (fn [prog n] (let [i (.getUniformBlockIndex gl prog n)]
+                              (when (not= i (.-INVALID_INDEX gl)) (.uniformBlockBinding gl prog i 0))))]
+    (bind-g lit-p "G_block_0Vertex") (bind-g lit-p "G_block_0Fragment") (bind-g shd-p "G_block_0Vertex")
+    (fn draw! [packed-G mesh instances [w h]]
+      (.bindBuffer gl (.-UNIFORM_BUFFER gl) gbuf)
+      (.bufferData gl (.-UNIFORM_BUFFER gl) packed-G (.-DYNAMIC_DRAW gl))
+      (.bindBufferBase gl (.-UNIFORM_BUFFER gl) 0 gbuf)
+      (.bindBuffer gl (.-ARRAY_BUFFER gl) ibuf)
+      (.bufferData gl (.-ARRAY_BUFFER gl) (:buf instances) (.-DYNAMIC_DRAW gl))
+      (let [vao (mesh-vao gl (:vbuf mesh) (:ibuf mesh) ibuf)
+            n   (:count instances)]
+        (.enable gl (.-DEPTH_TEST gl))
+        ;; pass 1 — depth into the shadow map from the sun's POV
+        (.bindFramebuffer gl (.-FRAMEBUFFER gl) (:fbo sm))
+        (.viewport gl 0 0 (:size sm) (:size sm)) (.clear gl (.-DEPTH_BUFFER_BIT gl))
+        (.useProgram gl shd-p) (.bindVertexArray gl vao)
+        (.drawElementsInstanced gl (.-TRIANGLES gl) (:count mesh) (.-UNSIGNED_SHORT gl) 0 n)
+        ;; pass 2 — main, sampling the shadow map
+        (.bindFramebuffer gl (.-FRAMEBUFFER gl) nil)
+        (.viewport gl 0 0 w h) (.clear gl (bit-or (.-COLOR_BUFFER_BIT gl) (.-DEPTH_BUFFER_BIT gl)))
+        (.useProgram gl lit-p)
+        (.activeTexture gl (.-TEXTURE0 gl)) (.bindTexture gl (.-TEXTURE_2D gl) (:tex sm))
+        (.uniform1i gl (.getUniformLocation gl lit-p "_group_0_binding_1_fs") 0)
+        (.drawElementsInstanced gl (.-TRIANGLES gl) (:count mesh) (.-UNSIGNED_SHORT gl) 0 n)
+        (.bindVertexArray gl nil)))))

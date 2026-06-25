@@ -40,5 +40,25 @@
     (is (> (:greenPixels r) 500) "green rect drew (a block of green fragments)")
     (is (< (:litPixels r) (* 640 480)) "background not fully filled (SDF discards outside the shapes)")))
 
+(deftest arc-renders-as-ring
+  ;; :arc (shape 2) renders as a ring/annulus (crescents/brims), not the box rect 1 used to fall into.
+  (let [quads (sg/draw-ops->quads [{:sprite [[:arc {:rx 100 :ry 100 :fill [1 1 0]}]] :sx 320 :sy 240}])
+        js (str "const V=" (json/generate-string (glsl "sprite.vert")) ";const F=" (json/generate-string (glsl "sprite.frag")) ";"
+                "const data=new Float32Array(" (json/generate-string (vec (sg/pack-instances quads))) ");"
+                "const W=640,H=480;const gl=Object.assign(document.createElement('canvas'),{width:W,height:H}).getContext('webgl2');"
+                "function c(t,s){const x=gl.createShader(t);gl.shaderSource(x,s);gl.compileShader(x);return x;}"
+                "const p=gl.createProgram();gl.attachShader(p,c(gl.VERTEX_SHADER,V));gl.attachShader(p,c(gl.FRAGMENT_SHADER,F));gl.linkProgram(p);"
+                "const vao=gl.createVertexArray();gl.bindVertexArray(vao);const ib=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,ib);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);"
+                "[[0,2,0],[1,2,8],[2,1,16],[3,1,20],[4,4,24]].forEach(([l,n,o])=>{gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,n,gl.FLOAT,false,48,o);gl.vertexAttribDivisor(l,1);});"
+                "const ub=gl.createBuffer();gl.bindBuffer(gl.UNIFORM_BUFFER,ub);gl.bufferData(gl.UNIFORM_BUFFER,new Float32Array([W,H,0,0]),gl.STATIC_DRAW);"
+                "gl.uniformBlockBinding(p,gl.getUniformBlockIndex(p,'U_block_0Vertex'),0);gl.bindBufferBase(gl.UNIFORM_BUFFER,0,ub);"
+                "gl.useProgram(p);gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawArraysInstanced(gl.TRIANGLES,0,6,1);"
+                "function px(x,y){const b=new Uint8Array(4);gl.readPixels(x,H-1-y,1,1,gl.RGBA,gl.UNSIGNED_BYTE,b);return b[0];}"
+                "return {center:px(320,240), ring:px(390,240)};")
+        r (pw/eval-page js)]
+    (println "  arc — centre(hole):" (:center r) " ring@70%:" (:ring r))
+    (is (< (:center r) 50) "the arc has a hollow centre (a ring, not a filled box)")
+    (is (> (:ring r) 180)  "the arc's ring band is filled")))
+
 (let [{:keys [fail error]} (run-tests 'playwright-render-test)]
   (when (pos? (+ fail error)) (throw (ex-info "gpu-2d render test failed" {:fail fail :error error}))))

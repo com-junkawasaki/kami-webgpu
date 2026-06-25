@@ -120,6 +120,8 @@
            [:var :d [:- [:length :i.uv] 1.0]]                       ;; circle/ellipse (shape 0)
            [:if [:> :i.shape 0.5]                                   ;; shape 1 = rect (box SDF)
             [[:set :d [:- [:max [:abs :i.uv.x] [:abs :i.uv.y]] 1.0]]]]
+           [:if [:> :i.shape 1.5]                                   ;; shape 2 = arc/ring (annulus, overrides)
+            [[:set :d [:- [:abs [:- [:length :i.uv] 0.7]] 0.3]]]]   ;; ring r∈[0.4,1.0] — crescents/brims
            [:let :aa [:fwidth :d]]
            [:let :cov [:- 1.0 [:smoothstep [:- :aa] :aa :d]]]       ;; anti-aliased coverage
            [:if [:<= :cov 0.0] ["discard"]]

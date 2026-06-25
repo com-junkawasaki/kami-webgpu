@@ -25,10 +25,13 @@ void main() {
     if ((i.shape > 0.5)) {
         d = (max(abs(i.uv.x), abs(i.uv.y)) - 1.0);
     }
-    float _e18 = d;
-    float aa = fwidth(_e18);
-    float _e21 = d;
-    float cov = (1.0 - smoothstep(-(aa), aa, _e21));
+    if ((i.shape > 1.5)) {
+        d = (abs((length(i.uv) - 0.7)) - 0.3);
+    }
+    float _e28 = d;
+    float aa = fwidth(_e28);
+    float _e31 = d;
+    float cov = (1.0 - smoothstep(-(aa), aa, _e31));
     if ((cov <= 0.0)) {
         discard;
     }

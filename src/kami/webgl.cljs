@@ -8,7 +8,8 @@
    uniforms in a std140 block, the full-quad corners from gl_VertexID. So `(pick-backend)` selects
    WebGPU when navigator.gpu exists and falls back here otherwise — one EDN, two GPU runtimes."
   (:require [kami.gpu :as gpu]
-            [kami.sprite-gpu :as sg]))
+            [kami.sprite-gpu :as sg]
+            [kami.webgl.glsl :as glsl]))
 
 ;; ── backend selection ────────────────────────────────────────────────────────────────────────────
 (defn webgpu-available? [] (boolean (and js/navigator (.-gpu js/navigator))))
@@ -59,7 +60,7 @@
   "Build a 2D-sprite draw fn for this WebGL2 context from the generated GLSL (sprite.vert/.frag).
    The returned `(draw! quad-instances [w h])` packs + uploads the instances and issues one
    instanced draw — the whole 2D frame in a single call, rendering the SDF shapes on the GPU."
-  [gl {:keys [vert frag]}]
+  [gl & [{:keys [vert frag] :or {vert glsl/sprite-vert frag glsl/sprite-frag}}]]
   (let [prog (program gl vert frag)
         vao  (.createVertexArray gl)
         ibuf (.createBuffer gl)

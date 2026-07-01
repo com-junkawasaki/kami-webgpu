@@ -14,6 +14,7 @@
          '[kami.sky :as sky]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
+         '[babashka.fs :as fs]
          '[babashka.process :as p])
 
 ;; the web-facing raster shaders (isekai's WebGL2 fallback set): lit + shadow (3D), sprite-SDF (2D).
@@ -25,18 +26,26 @@
 
 (io/make-parents (io/file "fixtures/glsl/.keep"))
 (println "── kami.wgsl EDN → WGSL → naga → GLSL ES 3.00 (WebGL2) ──")
-(let [results
-      (doall
-       (for [{:keys [name wgsl entries]} shaders
-             [entry stage] entries]
-         (let [wf  (str "/tmp/kglsl_" name ".wgsl")
-               out (str "fixtures/glsl/" name "." stage)]   ;; .vert/.frag — naga picks the GLSL stage by extension
-           (spit wf wgsl)
-           (let [r (p/sh "naga" wf out "--entry-point" entry "--profile" "es300")
-                 ver (when (.exists (io/file out)) (str/trim (first (str/split-lines (slurp out)))))
-                 ok  (and (zero? (:exit r)) (= ver "#version 300 es"))]
-             (println (format "  %s %-24s %s" (if ok "✓" "✗") out (or ver (str/trim (:err r)))))
-             ok))))]
-  (println (format "  %d/%d shader stages → valid WebGL2 GLSL ES 3.00" (count (filter true? results)) (count results)))
-  (when (not (every? true? results))
-    (throw (ex-info "GLSL generation failed for some stages" {}))))
+(if-not (fs/which "naga")
+  (let [outputs (for [{:keys [name entries]} shaders
+                      [_ stage] entries]
+                  (str "fixtures/glsl/" name "." stage))
+        missing (remove #(.exists (io/file %)) outputs)]
+    (println "  skip: naga not installed; committed GLSL fixtures are used")
+    (when (seq missing)
+      (throw (ex-info "GLSL fixtures missing and naga is unavailable" {:missing (vec missing)}))))
+  (let [results
+        (doall
+         (for [{:keys [name wgsl entries]} shaders
+               [entry stage] entries]
+           (let [wf  (str "/tmp/kglsl_" name ".wgsl")
+                 out (str "fixtures/glsl/" name "." stage)]   ;; .vert/.frag — naga picks the GLSL stage by extension
+             (spit wf wgsl)
+             (let [r (p/sh "naga" wf out "--entry-point" entry "--profile" "es300")
+                   ver (when (.exists (io/file out)) (str/trim (first (str/split-lines (slurp out)))))
+                   ok  (and (zero? (:exit r)) (= ver "#version 300 es"))]
+               (println (format "  %s %-24s %s" (if ok "✓" "✗") out (or ver (str/trim (:err r)))))
+               ok))))]
+    (println (format "  %d/%d shader stages → valid WebGL2 GLSL ES 3.00" (count (filter true? results)) (count results)))
+    (when (not (every? true? results))
+      (throw (ex-info "GLSL generation failed for some stages" {})))))
